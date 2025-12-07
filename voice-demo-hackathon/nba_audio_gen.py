@@ -163,24 +163,119 @@ async def process_narration_json(json_data):
 
 
 
-async def process_json_from_file(file_path: str):
+async def process_json_files_from_directory(text_dir: str, output_dir: str, voice_file: str) -> None:
     """
-    Process JSON from a file.
+    Process all JSON files from a directory.
+    Each file is expected to be a response object with a 'commentary' field.
 
     Args:
-        file_path: Path to JSON file
+        text_dir: Path to directory containing response_*.json files
+        output_dir: Directory to save generated audio files
+        voice_file: Path to voice reference file
     """
-    try:
-        with open(file_path, "r") as f:
-            json_data = json.load(f)
-            print(f"## json_data {json_data }")
-        await process_narration_json(json_data)
-    except FileNotFoundError:
-        print(f"❌ File not found: {file_path}")
-    except json.JSONDecodeError as e:
-        print(f"❌ Invalid JSON in file: {e}")
-    except Exception as e:
-        print(f"❌ Error: {e}")
+    text_path = Path(text_dir)
+    output_path = Path(output_dir)
+    
+    if not text_path.exists():
+        print(f"❌ Directory not found: {text_path}")
+        return
+    
+    # Create output directory if it doesn't exist
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Get all response JSON files, sorted by name
+    json_files = sorted(text_path.glob("response_*.json"))
+    
+    if not json_files:
+        print(f"⚠️  No response_*.json files found in {text_path}")
+        return
+    
+    print(f"\n{'=' * 70}")
+    print(f"🎙️  Processing {len(json_files)} commentary files")
+    print(f"📁 Input: {text_path}")
+    print(f"📁 Output: {output_path}")
+    print(f"🎤 Voice: {voice_file}")
+    print(f"{'=' * 70}")
+    
+    # Track success/failure
+    success_count = 0
+    failed_count = 0
+    
+    # Process each file sequentially
+    for idx, json_file in enumerate(json_files):
+        try:
+            print(f"\n📄 File {idx + 1}/{len(json_files)}: {json_file.name}")
+            
+            # Load the response JSON
+            with open(json_file, "r") as f:
+                json_data = json.load(f)
+            
+            # Extract commentary from the response
+            commentary = json_data.get("commentary", "")
+            
+            # Clean up the commentary (remove extra quotes if present)
+            if commentary.startswith('"') and commentary.endswith('"'):
+                commentary = commentary[1:-1]
+            
+            if not commentary:
+                print(f"⚠️  No commentary text found, skipping")
+                failed_count += 1
+                continue
+            
+            text = commentary
+            print(f"📝 Commentary: {text[:80]}...")
+            
+            # Prompt for the voice model - consistent with TTS instructions
+            prompt = """You're a NBA game commentator who is enthusiastic and energetic. You are commentating a live basketball game with provided script. 
+            Please read the text, in a flow consistent with your earlier commentary as in the audio provided.
+            Make sure you stick to the provided script text.
+            """
+            
+            # Generate output filename
+            fixed_length = 4
+            formatted_index = f"{idx:0{fixed_length}d}"
+            output_file = output_path / f"output_{formatted_index}.mp3"
+            
+            # Call TTS API in a thread to avoid blocking
+            saved_path = await asyncio.to_thread(
+                tts_request,
+                text=text,
+                prompt=prompt,
+                voice_file=voice_file,
+                output_file=str(output_file),
+            )
+            
+            if saved_path:
+                print(f"💾 Saved to: {saved_path}")
+                
+                # Play immediately using system audio player (non-blocking)
+                print(f"🔊 Playing audio...")
+                await asyncio.to_thread(
+                    subprocess.run,
+                    ["afplay", saved_path],
+                    check=False,
+                )
+                success_count += 1
+            else:
+                print(f"⚠️  Failed to generate audio")
+                failed_count += 1
+        
+        except json.JSONDecodeError as e:
+            print(f"❌ Invalid JSON in {json_file.name}: {e}")
+            failed_count += 1
+        except Exception as e:
+            print(f"❌ Error processing {json_file.name}: {e}")
+            failed_count += 1
+        
+        # Small pause between files
+        if idx < len(json_files) - 1:
+            await asyncio.sleep(0.5)
+    
+    print(f"\n{'=' * 70}")
+    print(f"✅ Successfully processed: {success_count}/{len(json_files)}")
+    if failed_count > 0:
+        print(f"❌ Failed: {failed_count}")
+    print(f"{'=' * 70}")
 
 
 
@@ -188,14 +283,53 @@ def main():
     """
     Demo examples showing different use cases.
     """
-    print("=" * 60)
-    print("Text-to-Speech API Demo")
-    print("=" * 60)
-
-    print("\n📝 Example 1: Simple POST request")
-    print("-" * 60)
-
-    asyncio.run(process_json_from_file("script_from_event/commentary.json"))
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="Generate audio from NBA game commentary using Grok Voice TTS"
+    )
+    parser.add_argument(
+        "--text-dir",
+        "-t",
+        default="text",
+        help="Directory containing response_*.json files (default: text)"
+    )
+    parser.add_argument(
+        "--output-dir",
+        "-o",
+        default="output",
+        help="Directory to save generated audio files (default: output)"
+    )
+    parser.add_argument(
+        "--voice",
+        "-v",
+        default="voices/steve-jobs.m4a",
+        help="Path to voice reference file (default: voices/steve-jobs.m4a)"
+    )
+    
+    args = parser.parse_args()
+    
+    print("=" * 70)
+    print("NBA Audio Generation - Grok Voice TTS")
+    print("=" * 70)
+    
+    # Check if voice file exists
+    voice_path = Path(args.voice)
+    if not voice_path.exists():
+        print(f"❌ Voice file not found: {args.voice}")
+        return 1
+    
+    # Check if API key is set
+    if not API_KEY:
+        print("❌ XAI_API_KEY environment variable not set")
+        return 1
+    
+    # Run the async function
+    asyncio.run(process_json_files_from_directory(
+        args.text_dir,
+        args.output_dir,
+        args.voice
+    ))
 
 
 if __name__ == "__main__":
