@@ -15,6 +15,8 @@ st.markdown("### AI-Powered Live Sports Narration")
 # --- SESSION STATE MANAGEMENT ---
 if "process" not in st.session_state:
     st.session_state.process = None
+if "crowd_process" not in st.session_state:
+    st.session_state.crowd_process = None
 if "is_running" not in st.session_state:
     st.session_state.is_running = False
 
@@ -47,10 +49,7 @@ if youtube_url:
         team_options = ["Memphis Grizzlies", "Orlando Magic", "Neither (Neutral)"]
         input_json_file = "magicvgrizzlies.json"
 
-    # https://www.youtube.com/watch?v=It8h_JhEREw
-    # Case 2: Lakers vs Clippers
-
-
+    # Case 2: Bucks vs Spurs
     elif "L7o4UCIIqS4" in youtube_url:
         team_options = [
             "Milwuakee Bucks",
@@ -79,9 +78,22 @@ if youtube_url:
     with stop_col:
         if st.session_state.is_running:
             if st.button("⏹️ Stop", type="secondary"):
+                # 1. Kill Grok Script
                 if st.session_state.process:
                     st.session_state.process.terminate()
                     st.session_state.process = None
+
+                # 2. Kill Crowd Noise (Kill Process Group to ensure 'while' loop ends)
+                if st.session_state.crowd_process:
+                    try:
+                        os.killpg(
+                            os.getpgid(st.session_state.crowd_process.pid),
+                            signal.SIGTERM,
+                        )
+                    except ProcessLookupError:
+                        pass
+                    st.session_state.crowd_process = None
+
                 st.session_state.is_running = False
                 st.rerun()
 
@@ -97,7 +109,6 @@ if youtube_url:
 
             # --- START TIME LOGIC ---
             start_time = 0
-            # If Lakers vs Clippers, start at 2:58 (178 seconds)
             if "L7o4UCIIqS4" in youtube_url:
                 start_time = 8
 
@@ -113,7 +124,21 @@ if youtube_url:
             st.write("🎙️ **Live Audio Feed**")
             log_placeholder = st.empty()
 
-            # 3. Execute Script with Dynamic JSON File
+            # --- PROCESS 1: BACKGROUND CROWD NOISE ---
+            # We use a shell loop to play the MP3 indefinitely.
+            # -v 0.1 sets the volume to 10% so it doesn't overpower the commentary.
+            try:
+                crowd_cmd = "while true; do afplay -v 0.1 basketballcrowd.mp3; done"
+                crowd_process = subprocess.Popen(
+                    crowd_cmd,
+                    shell=True,
+                    preexec_fn=os.setsid,  # Create new process group for easier cleanup
+                )
+                st.session_state.crowd_process = crowd_process
+            except Exception as e:
+                st.error(f"Failed to start crowd noise: {e}")
+
+            # --- PROCESS 2: GROK SCRIPT ---
             command = [
                 sys.executable,
                 "grok_script.py",
