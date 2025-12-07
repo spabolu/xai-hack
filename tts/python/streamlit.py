@@ -1,10 +1,17 @@
 import streamlit as st
 import subprocess
-import sys
 import os
-import time
 import signal
 import atexit
+import asyncio
+import json
+
+# Import streaming functions from grok_script
+from grok_script import (
+    NBACommentaryAgent,
+    sanitize_text,
+    stream_to_speaker,
+)
 
 # Page Config
 st.set_page_config(page_title="Grok NBA Commentary", page_icon="🏀", layout="wide")
@@ -64,6 +71,74 @@ if "crowd_process" not in st.session_state:
     st.session_state.crowd_process = None
 if "is_running" not in st.session_state:
     st.session_state.is_running = False
+if "stop_streaming" not in st.session_state:
+    st.session_state.stop_streaming = False
+
+
+# --- STREAMING COMMENTARY FUNCTION ---
+async def run_streaming_commentary(events, language, team_support, log_placeholder):
+    """
+    Run streaming pipeline with real-time Streamlit UI updates.
+
+    Flow: NBA Event -> Grok LLM (token stream) -> TTS (audio chunks) -> Speaker
+    """
+    agent = NBACommentaryAgent(language=language, team_support=team_support)
+    optimized = events  # Process each event individually (no merging)
+
+    voices = ["leo", "ara", "rex"]
+    voice_idx = 0
+    logs = []
+
+    for i, event in enumerate(optimized):
+        # Check for cancellation
+        if st.session_state.stop_streaming:
+            logs.append("⏹️ Streaming stopped by user")
+            log_placeholder.code("\n".join(logs[-15:]), language="bash")
+            break
+
+        event_time = event.get("timeActual", 0)
+        description = event.get("description", "")[:50]
+
+        # Update UI with current event
+        logs.append(f"[{event_time:.1f}s] {description}...")
+        log_placeholder.code("\n".join(logs[-15:]), language="bash")
+
+        # 1. Stream tokens from Grok LLM
+        text = ""
+        try:
+            async for token in agent.process_event_streaming(event):
+                text += token
+                # Update UI with streaming tokens
+                current_log = logs[-1] if logs else ""
+                display_logs = logs[:-1] + [f"{current_log}\n  LLM: {text}"]
+                log_placeholder.code("\n".join(display_logs[-15:]), language="bash")
+        except Exception as e:
+            logs.append(f"  LLM Error: {e}")
+            log_placeholder.code("\n".join(logs[-15:]), language="bash")
+            continue
+
+        # 2. Sanitize text
+        clean_text = sanitize_text(text)
+        if not clean_text:
+            logs.append("  (empty, skipping)")
+            continue
+
+        # 3. Stream to speaker via WebSocket TTS
+        current_voice = voices[voice_idx % len(voices)]
+        voice_idx += 1
+
+        logs.append(f"  🔊 [{current_voice}]: {clean_text[:40]}...")
+        log_placeholder.code("\n".join(logs[-15:]), language="bash")
+
+        try:
+            await stream_to_speaker(clean_text, voice=current_voice)
+        except Exception as e:
+            logs.append(f"  TTS Error: {e}")
+            log_placeholder.code("\n".join(logs[-15:]), language="bash")
+
+    logs.append("✅ Streaming complete")
+    log_placeholder.code("\n".join(logs[-15:]), language="bash")
+
 
 # --- UI SECTION 1: CONFIGURATION ---
 with st.container():
@@ -123,10 +198,8 @@ if youtube_url:
     with stop_col:
         if st.session_state.is_running:
             if st.button("⏹️ Stop", type="secondary"):
-                # 1. Kill Grok Script
-                if st.session_state.process:
-                    st.session_state.process.terminate()
-                    st.session_state.process = None
+                # 1. Set cancellation flag for streaming
+                st.session_state.stop_streaming = True
 
                 # 2. Kill Crowd Noise (Kill Process Group to ensure 'while' loop ends)
                 if st.session_state.crowd_process:
@@ -138,6 +211,12 @@ if youtube_url:
                     except ProcessLookupError:
                         pass
                     st.session_state.crowd_process = None
+
+                # 3. Kill any remaining audio players
+                try:
+                    subprocess.run(["pkill", "-f", "afplay"], check=False)
+                except Exception:
+                    pass
 
                 st.session_state.is_running = False
                 st.rerun()
@@ -179,46 +258,24 @@ if youtube_url:
             except Exception as e:
                 st.error(f"Failed to start crowd noise: {e}")
 
-            # --- PROCESS 2: GROK SCRIPT ---
-            command = [
-                sys.executable,
-                "grok_script.py",
-                "--input",
-                input_json_file,
-                "--pipeline",
-                "--language",
-                language,
-                "--team_support",
-                team_support,
-            ]
+            # --- PROCESS 2: STREAMING COMMENTARY (In-Process) ---
+            # Reset stop flag
+            st.session_state.stop_streaming = False
 
             try:
-                process = subprocess.Popen(
-                    command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
+                # Load events from JSON
+                with open(input_json_file) as f:
+                    events = json.load(f)
+
+                # Run streaming pipeline in-process
+                asyncio.run(
+                    run_streaming_commentary(
+                        events, language, team_support, log_placeholder
+                    )
                 )
-                st.session_state.process = process
-
-                # Stream logs to the UI in real-time
-                logs = []
-                while True:
-                    # Read line by line
-                    line = process.stdout.readline()
-                    if not line and process.poll() is not None:
-                        break
-
-                    if line:
-                        clean_line = line.strip()
-                        logs.append(clean_line)
-                        # Keep only the last 15 lines for the log view
-                        log_text = "\n".join(logs[-15:])
-                        log_placeholder.code(log_text, language="bash")
 
             except Exception as e:
-                st.error(f"Failed to start audio script: {e}")
+                st.error(f"Failed to start streaming commentary: {e}")
 
 else:
     st.info("Please enter a YouTube link to continue.")

@@ -1,413 +1,287 @@
 #!/usr/bin/env python3
 """
-Streaming TTS using xAI WebSocket Real-time API
+Streaming Text-to-Speech Example
 
-Provides near-instant audio playback by streaming audio chunks
-as they're generated, instead of waiting for the full file.
+This example demonstrates how to use XAI's streaming TTS API to convert text to speech
+in real-time using WebSocket connections. The audio is played as it's received and
+optionally saved to a file.
 
-Latency: ~200ms to first audio (vs 2-5 seconds with REST API)
+API: wss://api.x.ai/v1/realtime/audio/speech
+Audio format: PCM linear16, 24kHz, mono
 """
 
+import argparse
+import asyncio
+import base64
+import json
 import os
 import sys
-import json
-import base64
-import asyncio
-import struct
+import time
+import wave
 from pathlib import Path
-from typing import Optional, Callable
 
-try:
-    import websockets
-except ImportError:
-    print("❌ websockets not installed. Run: pip install websockets")
-    sys.exit(1)
-
-try:
-    import pyaudio
-except ImportError:
-    print("❌ pyaudio not installed. Run: pip install pyaudio")
-    print("   On macOS: brew install portaudio && pip install pyaudio")
-    sys.exit(1)
-
+import websockets
 from dotenv import load_dotenv
 
-# Load environment variables
-script_dir = Path(__file__).parent
-env_path = script_dir / ".env"
-load_dotenv(dotenv_path=env_path, override=True)
+# PyAudio is optional - only needed for playback
+try:
+    import pyaudio
 
-# Configuration
-XAI_API_KEY = os.getenv("XAI_API_KEY")
-REALTIME_API_URL = os.getenv("REALTIME_API_URL", "wss://api.x.ai/v1/realtime")
-
-# Audio settings for streaming
-SAMPLE_RATE = 24000  # 24kHz is common for TTS
-CHANNELS = 1
-SAMPLE_WIDTH = 2  # 16-bit audio
+    PYAUDIO_AVAILABLE = True
+except ImportError:
+    PYAUDIO_AVAILABLE = False
+    pyaudio = None
 
 
-class StreamingTTS:
-    """
-    WebSocket-based streaming TTS client for xAI.
-    
-    Plays audio chunks immediately as they arrive for low-latency playback.
-    """
-    
-    def __init__(
-        self,
-        voice: str = "Ara",
-        sample_rate: int = SAMPLE_RATE,
-        on_audio_start: Optional[Callable] = None,
-        on_audio_end: Optional[Callable] = None,
-    ):
-        """
-        Initialize streaming TTS.
-        
-        Args:
-            voice: Voice to use (Ara, Rex, Sal, Eve, Una, Leo)
-            sample_rate: Audio sample rate (default: 24000)
-            on_audio_start: Callback when audio starts playing
-            on_audio_end: Callback when audio finishes
-        """
-        self.voice = voice
-        self.sample_rate = sample_rate
-        self.on_audio_start = on_audio_start
-        self.on_audio_end = on_audio_end
-        
-        # Audio player
-        self.pyaudio = pyaudio.PyAudio()
-        self.stream = None
-        
-        # State
-        self.is_playing = False
-        self.total_bytes_played = 0
-        
-    def _init_audio_stream(self):
-        """Initialize PyAudio stream for playback."""
-        if self.stream is not None:
-            self.stream.close()
-            
-        self.stream = self.pyaudio.open(
-            format=pyaudio.paInt16,
-            channels=CHANNELS,
-            rate=self.sample_rate,
-            output=True,
-            frames_per_buffer=1024,
-        )
-        
-    def _play_chunk(self, audio_data: bytes):
-        """Play a chunk of audio data immediately."""
-        if self.stream is None:
-            self._init_audio_stream()
-            
-        if not self.is_playing:
-            self.is_playing = True
-            if self.on_audio_start:
-                self.on_audio_start()
-                
-        self.stream.write(audio_data)
-        self.total_bytes_played += len(audio_data)
-        
-    def _decode_base64_pcm(self, base64_data: str) -> bytes:
-        """Decode base64-encoded PCM audio data."""
-        return base64.b64decode(base64_data)
-    
-    async def speak(self, text: str, save_to_file: Optional[str] = None) -> float:
-        """
-        Stream TTS audio for the given text.
-        
-        Args:
-            text: Text to convert to speech
-            save_to_file: Optional path to save the complete audio
-            
-        Returns:
-            Duration of audio played in seconds
-        """
-        if not XAI_API_KEY:
-            raise ValueError("XAI_API_KEY not found in environment variables")
-            
-        self.total_bytes_played = 0
-        self.is_playing = False
-        audio_buffer = bytearray()
-        
-        print(f"🎙️  Streaming TTS: {text[:50]}...", file=sys.stderr)
-        
-        try:
-            # Connect to WebSocket
-            # Note: websockets library changed parameter name in v10+
-            # Try both 'additional_headers' (new) and 'extra_headers' (old)
-            headers = [("Authorization", f"Bearer {XAI_API_KEY}")]
-            
-            try:
-                # websockets >= 10.0
-                ws = await websockets.connect(
-                    REALTIME_API_URL,
-                    additional_headers=headers,
-                    ping_interval=20,
-                    ping_timeout=20,
-                )
-            except TypeError:
-                # websockets < 10.0
-                ws = await websockets.connect(
-                    REALTIME_API_URL,
-                    extra_headers=headers,
-                    ping_interval=20,
-                    ping_timeout=20,
-                )
-            
-            async with ws:
-                
-                # Configure session for audio output
-                session_config = {
-                    "type": "session.update",
-                    "session": {
-                        "voice": self.voice,
-                        "modalities": ["audio", "text"],
-                        "audio": {
-                            "output": {
-                                "format": {
-                                    "type": "audio/pcm",
-                                    "rate": self.sample_rate
-                                }
-                            }
-                        }
-                    }
-                }
-                await ws.send(json.dumps(session_config))
-                
-                # Wait for session confirmation
-                response = await ws.recv()
-                event = json.loads(response)
-                if event.get("type") == "error":
-                    raise Exception(f"Session error: {event}")
-                    
-                # Send text for TTS
-                tts_request = {
-                    "type": "conversation.item.create",
-                    "item": {
-                        "type": "message",
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_text",
-                                "text": f"Please say the following text exactly: {text}"
-                            }
-                        ]
-                    }
-                }
-                await ws.send(json.dumps(tts_request))
-                
-                # Request response
-                await ws.send(json.dumps({"type": "response.create"}))
-                
-                # Listen for audio chunks
-                first_chunk = True
-                async for message in ws:
-                    event = json.loads(message)
-                    event_type = event.get("type", "")
-                    
-                    if event_type == "response.audio.delta":
-                        # Decode and play audio chunk immediately
-                        delta = event.get("delta", "")
-                        if delta:
-                            audio_chunk = self._decode_base64_pcm(delta)
-                            
-                            if first_chunk:
-                                print(f"▶️  First audio chunk received!", file=sys.stderr)
-                                first_chunk = False
-                                
-                            self._play_chunk(audio_chunk)
-                            audio_buffer.extend(audio_chunk)
-                            
-                    elif event_type == "response.audio.done":
-                        # Audio generation complete
-                        break
-                        
-                    elif event_type == "response.done":
-                        # Full response complete
-                        break
-                        
-                    elif event_type == "error":
-                        print(f"❌ Error: {event}", file=sys.stderr)
-                        break
-                        
-        except websockets.exceptions.ConnectionClosed as e:
-            print(f"⚠️  WebSocket closed: {e}", file=sys.stderr)
-        except Exception as e:
-            print(f"❌ Streaming error: {e}", file=sys.stderr)
-            raise
-        finally:
-            self.is_playing = False
-            if self.on_audio_end:
-                self.on_audio_end()
-                
-        # Save to file if requested
-        if save_to_file and audio_buffer:
-            output_path = Path(save_to_file)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Save as raw PCM (can convert to WAV later if needed)
-            with open(output_path, "wb") as f:
-                f.write(audio_buffer)
-            print(f"💾 Saved: {output_path}", file=sys.stderr)
-            
-        # Calculate duration
-        duration = self.total_bytes_played / (self.sample_rate * SAMPLE_WIDTH * CHANNELS)
-        print(f"✓  Played {duration:.2f}s of audio", file=sys.stderr)
-        
-        return duration
-    
-    def close(self):
-        """Clean up audio resources."""
-        if self.stream:
-            self.stream.close()
-        self.pyaudio.terminate()
-
-
-class StreamingTTSSimple:
-    """
-    Simplified streaming TTS using REST API with streaming response.
-    
-    Falls back to this if WebSocket API is not available.
-    Uses requests with stream=True for chunk-by-chunk download.
-    """
-    
-    def __init__(self, voice: str = "Ara"):
-        self.voice = voice
-        self.api_url = os.getenv("BASE_URL", "https://api.x.ai/v1") + "/audio/speech"
-        
-        self.pyaudio = pyaudio.PyAudio()
-        self.stream = None
-        
-    def _init_audio_stream(self, sample_rate: int = 24000):
-        """Initialize PyAudio stream."""
-        if self.stream:
-            self.stream.close()
-            
-        self.stream = self.pyaudio.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=sample_rate,
-            output=True,
-            frames_per_buffer=1024,
-        )
-        
-    async def speak(self, text: str) -> float:
-        """
-        Stream TTS using REST API with streaming response.
-        
-        Note: This still has some initial latency but streams the download.
-        """
-        import requests
-        
-        if not XAI_API_KEY:
-            raise ValueError("XAI_API_KEY not found")
-            
-        headers = {
-            "Authorization": f"Bearer {XAI_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        
-        data = {
-            "input": text,
-            "voice": self.voice,
-            "response_format": "pcm",  # Raw PCM for streaming
-        }
-        
-        print(f"🎙️  Streaming TTS (REST): {text[:50]}...", file=sys.stderr)
-        
-        total_bytes = 0
-        self._init_audio_stream()
-        
-        try:
-            # Stream the response
-            response = requests.post(
-                self.api_url,
-                headers=headers,
-                json=data,
-                stream=True,
-            )
-            response.raise_for_status()
-            
-            first_chunk = True
-            for chunk in response.iter_content(chunk_size=4096):
-                if chunk:
-                    if first_chunk:
-                        print(f"▶️  First chunk received!", file=sys.stderr)
-                        first_chunk = False
-                        
-                    self.stream.write(chunk)
-                    total_bytes += len(chunk)
-                    
-        except Exception as e:
-            print(f"❌ Error: {e}", file=sys.stderr)
-            raise
-            
-        duration = total_bytes / (24000 * 2)  # Assuming 24kHz, 16-bit
-        print(f"✓  Played {duration:.2f}s of audio", file=sys.stderr)
-        
-        return duration
-        
-    def close(self):
-        """Clean up."""
-        if self.stream:
-            self.stream.close()
-        self.pyaudio.terminate()
-
-
-# Convenience function for quick streaming TTS
-async def stream_speak(
+async def streaming_tts(
     text: str,
-    voice: str = "Ara",
-    use_websocket: bool = True,
-) -> float:
+    voice: str = "ara",
+    output_file: str = None,
+    play_audio: bool = True,
+    sample_rate: int = 24000,
+    channels: int = 1,
+    sample_width: int = 2,
+):
     """
-    Quick function to stream TTS audio.
-    
+    Stream text-to-speech from XAI API.
+
     Args:
-        text: Text to speak
-        voice: Voice to use
-        use_websocket: Use WebSocket API (faster) or REST streaming
-        
-    Returns:
-        Duration of audio played
+        text: Text to convert to speech
+        voice: Voice ID (ara, rex, sal, eve, una, leo)
+        output_file: Optional path to save audio
+        play_audio: Whether to play audio in real-time
+        sample_rate: Audio sample rate (24000 Hz)
+        channels: Number of audio channels (1 for mono)
+        sample_width: Sample width in bytes (2 for 16-bit)
     """
-    if use_websocket:
-        tts = StreamingTTS(voice=voice)
-    else:
-        tts = StreamingTTSSimple(voice=voice)
-        
+    # Get API key
+    api_key = os.getenv("XAI_API_KEY")
+    if not api_key:
+        raise ValueError("XAI_API_KEY not found in environment variables")
+
+    # Get base URL
+    base_url = os.getenv("BASE_URL", "https://api.x.ai/v1")
+    ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://")
+    uri = f"{ws_url}/realtime/audio/speech"
+
+    print(f"🎤 Connecting to {uri}")
+    print(f"📝 Voice: {voice}")
+    print(f"📄 Text: {text[:50]}{'...' if len(text) > 50 else ''}")
+
+    # Set up headers
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    # Initialize audio playback if needed
+    audio_stream = None
+    p = None
+    if play_audio:
+        if not PYAUDIO_AVAILABLE:
+            print("⚠️  PyAudio not available - skipping playback")
+            print("   Install with: pip install pyaudio")
+            play_audio = False
+        else:
+            p = pyaudio.PyAudio()
+            audio_stream = p.open(
+                format=pyaudio.paInt16 if sample_width == 2 else pyaudio.paInt32,
+                channels=channels,
+                rate=sample_rate,
+                output=True,
+            )
+
+    audio_bytes = b""
+    chunk_count = 0
+
+    # Timing metrics
+    start_time = time.time()
+    first_chunk_time = None
+    last_chunk_time = None
+
     try:
-        return await tts.speak(text)
+        async with websockets.connect(uri, additional_headers=headers) as websocket:
+            print("✅ Connected to XAI streaming TTS API")
+
+            # Send config message
+            config_message = {"type": "config", "data": {"voice_id": voice}}
+            await websocket.send(json.dumps(config_message))
+            print(f"📤 Sent config: {config_message}")
+
+            # Send text chunk
+            text_message = {
+                "type": "text_chunk",
+                "data": {"text": text, "is_last": True},  # set to false
+            }
+            await websocket.send(json.dumps(text_message))
+            request_sent_time = time.time()
+            print(f"📤 Sent text chunk")
+
+            # Receive audio chunks
+            print("🎵 Receiving and playing audio in real-time...")
+            while True:
+                try:
+                    response = await websocket.recv()
+                    data = json.loads(response)
+
+                    # Extract audio data
+                    audio_b64 = data["data"]["data"]["audio"]
+                    is_last = data["data"]["data"].get("is_last", False)
+
+                    # Decode audio
+                    chunk_bytes = base64.b64decode(audio_b64)
+                    audio_bytes += chunk_bytes
+                    chunk_count += 1
+
+                    # Track timing
+                    current_time = time.time()
+                    if first_chunk_time is None and len(chunk_bytes) > 0:
+                        first_chunk_time = current_time
+                        time_to_first_audio = (
+                            first_chunk_time - request_sent_time
+                        ) * 1000
+                        print(
+                            f"  ⚡ First audio chunk received in {time_to_first_audio:.0f}ms"
+                        )
+
+                    # Play audio in real-time (streaming playback!)
+                    if play_audio and audio_stream and len(chunk_bytes) > 0:
+                        await asyncio.to_thread(audio_stream.write, chunk_bytes)
+
+                    print(f"  📦 Chunk {chunk_count}: {len(chunk_bytes)} bytes", end="")
+                    if is_last:
+                        last_chunk_time = current_time
+                        print(" (last)")
+                        break
+                    else:
+                        print()
+
+                except websockets.exceptions.ConnectionClosedOK:
+                    print("✅ Connection closed normally")
+                    break
+                except websockets.exceptions.ConnectionClosedError as e:
+                    print(f"❌ Connection closed with error: {e}")
+                    break
+
     finally:
-        tts.close()
+        # Clean up audio playback
+        if audio_stream:
+            audio_stream.stop_stream()
+            audio_stream.close()
+        if p:
+            p.terminate()
+
+    # Calculate and display metrics
+    total_time = time.time() - start_time
+    audio_duration = len(audio_bytes) / (sample_rate * channels * sample_width)
+
+    print(f"\n✅ Received {chunk_count} audio chunks ({len(audio_bytes)} bytes total)")
+    print(f"\n📊 Performance Metrics:")
+    if first_chunk_time:
+        print(
+            f"   ⚡ Time to first audio: {(first_chunk_time - request_sent_time) * 1000:.0f}ms"
+        )
+    if last_chunk_time:
+        print(
+            f"   ⏱️  Time to last byte: {(last_chunk_time - request_sent_time) * 1000:.0f}ms"
+        )
+    print(f"   📏 Audio duration: {audio_duration:.2f}s")
+    print(f"   🎯 Total time: {total_time:.2f}s")
+    if last_chunk_time and audio_duration > 0:
+        streaming_ratio = ((last_chunk_time - request_sent_time) / audio_duration) * 100
+        print(
+            f"   💡 Streaming efficiency: Generated in {streaming_ratio:.0f}% of playback time"
+        )
+        if streaming_ratio < 100:
+            print(
+                f"   🚀 Audio finished playing BEFORE generation completed (streaming advantage!)"
+            )
+
+    # Save to file if requested
+    if output_file:
+        output_path = Path(output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with wave.open(str(output_path), "wb") as wf:
+            wf.setnchannels(channels)
+            wf.setsampwidth(sample_width)
+            wf.setframerate(sample_rate)
+            wf.writeframes(audio_bytes)
+
+        print(f"💾 Saved audio to {output_file}")
+
+    return audio_bytes
 
 
-# Test function
-async def main():
-    """Test streaming TTS."""
-    print("=" * 60)
-    print("Streaming TTS Test")
-    print("=" * 60)
-    
-    test_text = "Hello! This is a test of the streaming text-to-speech system. The audio should start playing almost immediately!"
-    
-    print("\n1. Testing WebSocket streaming...")
+def main():
+    """Main entry point."""
+    load_dotenv()
+
+    parser = argparse.ArgumentParser(
+        description="Stream text-to-speech using XAI API",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic usage with default voice (Ara)
+  python streaming-tts.py "Hello, how are you today?"
+
+  # Specify voice
+  python streaming-tts.py "Hello!" --voice rex
+
+  # Save to file
+  python streaming-tts.py "Hello!" --output output.wav
+
+  # Disable playback (only save to file)
+  python streaming-tts.py "Hello!" --output output.wav --no-play
+
+Available voices:
+  ara - Female voice (default)
+  rex - Male voice
+  sal - Voice (likely Salathiel)
+  eve - Female voice
+  una - Female voice
+  leo - Male voice
+        """,
+    )
+
+    parser.add_argument("text", help="Text to convert to speech")
+    parser.add_argument(
+        "--voice",
+        default="ara",
+        choices=["ara", "rex", "sal", "eve", "una", "leo"],
+        help="Voice to use (default: ara)",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        help="Output file path (e.g., output.wav)",
+    )
+    parser.add_argument(
+        "--no-play",
+        action="store_true",
+        help="Don't play audio (only save to file)",
+    )
+
+    args = parser.parse_args()
+
+    # Validate
+    if args.no_play and not args.output:
+        print("❌ Error: --no-play requires --output to be specified")
+        sys.exit(1)
+
     try:
-        duration = await stream_speak(test_text, voice="Leo", use_websocket=True)
-        print(f"   WebSocket: {duration:.2f}s\n")
+        asyncio.run(
+            streaming_tts(
+                text=args.text,
+                voice=args.voice,
+                output_file=args.output,
+                play_audio=not args.no_play,
+            )
+        )
+    except KeyboardInterrupt:
+        print("\n⚠️  Interrupted by user")
+        sys.exit(1)
     except Exception as e:
-        print(f"   WebSocket failed: {e}")
-        print("   Falling back to REST streaming...\n")
-        
-        print("2. Testing REST streaming...")
-        duration = await stream_speak(test_text, voice="Leo", use_websocket=False)
-        print(f"   REST: {duration:.2f}s\n")
-    
-    print("=" * 60)
-    print("Done!")
+        print(f"❌ Error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

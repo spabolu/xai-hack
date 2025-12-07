@@ -107,7 +107,7 @@ async def streaming_tts(
             # Send text chunk
             text_message = {
                 "type": "text_chunk",
-                "data": {"text": text, "is_last": True},
+                "data": {"text": text, "is_last": True}, # set to false
             }
             await websocket.send(json.dumps(text_message))
             request_sent_time = time.time()

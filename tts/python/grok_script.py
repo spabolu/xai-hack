@@ -8,7 +8,8 @@ import json
 import asyncio
 import sys
 import re
-from typing import Dict, Any, List, Optional
+import base64
+from typing import Dict, Any, List, Optional, AsyncGenerator
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -167,10 +168,9 @@ CRITICAL RULES:
 """
 
     def process_event(
-        self, event: Dict[str, Any], time_budget: float = 10.0, max_tokens: int = 30
+        self, event: Dict[str, Any], time_budget: float = 10.0, max_tokens: int = 50
     ) -> CommentaryOutput:
-        # FORCE 6 WORDS
-        len_instruction = "STRICT LIMIT: Maximum 8 words."
+        len_instruction = "STRICT LIMIT: Maximum 15 words."
         description = event.get("description", "Play happening")
 
         prompt = f"""
@@ -200,9 +200,204 @@ CRITICAL RULES:
             timeActual=event.get("timeActual"),
         )
 
+    async def process_event_streaming(
+        self, event: Dict[str, Any], max_tokens: int = 50
+    ) -> AsyncGenerator[str, None]:
+        """
+        Stream tokens from Grok LLM for low-latency commentary generation.
+
+        Args:
+            event: NBA event dictionary with 'description' field
+            max_tokens: Maximum tokens to generate
+
+        Yields:
+            Token strings as they are generated
+        """
+        len_instruction = "STRICT LIMIT: Maximum 15 words."
+        description = event.get("description", "Play happening")
+
+        prompt = f"""
+    EVENT: {description}
+    INSTRUCTION: {len_instruction}
+    OUTPUT: Just the spoken commentary.
+    """
+
+        async for chunk in self.llm.astream(
+            [("system", self.system_prompt), ("human", prompt)],
+            max_tokens=max_tokens,
+        ):
+            if chunk.content:
+                yield chunk.content
+
 
 # =============================================================================
-# Pipeline Logic (Unchanged Helpers omitted for brevity)
+# Streaming TTS (WebSocket - No File Storage)
+# =============================================================================
+
+
+async def stream_to_speaker(text: str, voice: str = "leo") -> None:
+    """
+    Stream text directly to speaker via WebSocket TTS.
+    No file storage - audio chunks play immediately as they arrive.
+
+    Args:
+        text: Text to convert to speech
+        voice: Voice ID (ara, rex, sal, eve, una, leo)
+    """
+    import websockets
+
+    # Try to import pyaudio
+    try:
+        import pyaudio
+    except ImportError:
+        print("Warning: PyAudio not available, audio will not play", file=sys.stderr)
+        return
+
+    api_key = Config.XAI_API_KEY
+    if not api_key:
+        raise ValueError("XAI_API_KEY not found")
+
+    # WebSocket TTS endpoint
+    base_url = os.getenv("BASE_URL", "https://api.x.ai/v1")
+    ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://")
+    uri = f"{ws_url}/realtime/audio/speech"
+
+    # Audio settings (24kHz, mono, 16-bit PCM)
+    sample_rate = 24000
+    channels = 1
+
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    # Initialize PyAudio
+    p = pyaudio.PyAudio()
+    audio_stream = p.open(
+        format=pyaudio.paInt16,
+        channels=channels,
+        rate=sample_rate,
+        output=True,
+    )
+
+    try:
+        async with websockets.connect(uri, additional_headers=headers) as websocket:
+            # Send config
+            config_message = {"type": "config", "data": {"voice_id": voice}}
+            await websocket.send(json.dumps(config_message))
+
+            # Send text
+            text_message = {
+                "type": "text_chunk",
+                "data": {"text": text, "is_last": True},
+            }
+            await websocket.send(json.dumps(text_message))
+
+            # Receive and play audio chunks
+            while True:
+                try:
+                    response = await websocket.recv()
+                    data = json.loads(response)
+
+                    # Extract audio data
+                    audio_b64 = data["data"]["data"]["audio"]
+                    is_last = data["data"]["data"].get("is_last", False)
+
+                    # Decode and play immediately
+                    chunk_bytes = base64.b64decode(audio_b64)
+                    if len(chunk_bytes) > 0:
+                        await asyncio.to_thread(audio_stream.write, chunk_bytes)
+
+                    if is_last:
+                        break
+
+                except websockets.exceptions.ConnectionClosedOK:
+                    break
+                except websockets.exceptions.ConnectionClosedError:
+                    break
+
+    except Exception as e:
+        print(f"Streaming TTS error: {e}", file=sys.stderr)
+    finally:
+        audio_stream.stop_stream()
+        audio_stream.close()
+        p.terminate()
+
+
+# =============================================================================
+# Streaming Pipeline (LLM Tokens -> TTS Audio Chunks -> Speaker)
+# =============================================================================
+
+
+async def process_events_streaming(
+    events: List[Dict],
+    agent: NBACommentaryAgent,
+    speed_multiplier: float = 1.0,
+) -> None:
+    """
+    Process events with full streaming pipeline.
+
+    Flow: NBA Event -> Grok LLM (token stream) -> TTS (audio chunks) -> Speaker
+    No file storage - everything streams directly to speaker.
+
+    Args:
+        events: List of NBA events
+        agent: NBACommentaryAgent instance
+        speed_multiplier: Speed multiplier for event timing
+    """
+    print(
+        f"🚀 Starting Streaming Pipeline (Speed: {speed_multiplier}x)",
+        file=sys.stderr,
+    )
+    print("   LLM tokens -> TTS chunks -> Speaker (no file storage)", file=sys.stderr)
+
+    voices = ["leo", "ara", "rex"]
+    voice_idx = 0
+    last_event_time = 0.0
+
+    for i, event in enumerate(events):
+        event_time = event.get("timeActual", 0)
+        description = event.get("description", "")[:50]
+
+        # Pacing: wait based on event timing
+        wait_time = (event_time - last_event_time) / speed_multiplier
+        if wait_time > 0 and i > 0:
+            await asyncio.sleep(wait_time)
+        last_event_time = event_time
+
+        print(f"\n[{event_time:.1f}s] {description}...", file=sys.stderr)
+
+        # 1. Stream tokens from Grok LLM
+        text = ""
+        print("  LLM: ", end="", file=sys.stderr)
+        try:
+            async for token in agent.process_event_streaming(event):
+                text += token
+                print(token, end="", flush=True, file=sys.stderr)
+            print("", file=sys.stderr)  # newline
+        except Exception as e:
+            print(f"\n  LLM Error: {e}", file=sys.stderr)
+            continue
+
+        # 2. Sanitize text
+        clean_text = sanitize_text(text)
+        if not clean_text:
+            print("  (empty after sanitize, skipping)", file=sys.stderr)
+            continue
+
+        # 3. Stream to speaker via WebSocket TTS
+        current_voice = voices[voice_idx % len(voices)]
+        voice_idx += 1
+
+        print(f"  TTS [{current_voice}]: streaming...", file=sys.stderr)
+        try:
+            await stream_to_speaker(clean_text, voice=current_voice)
+            print(f"  Done.", file=sys.stderr)
+        except Exception as e:
+            print(f"  TTS Error: {e}", file=sys.stderr)
+
+    print("\n✅ Streaming pipeline complete.", file=sys.stderr)
+
+
+# =============================================================================
+# Pipeline Logic (Batch Mode - Legacy)
 # =============================================================================
 
 
@@ -344,14 +539,24 @@ async def process_events_pipelined(
 async def main_async():
     import argparse
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--pipeline", action="store_true")
-    parser.add_argument("--speed", type=float, default=1.0)
+    parser = argparse.ArgumentParser(
+        description="NBA Commentary Generator with Streaming Support"
+    )
+    parser.add_argument("--input", required=True, help="Input JSON file with events")
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Streaming mode: LLM tokens -> TTS chunks -> Speaker (no file storage)",
+    )
+    parser.add_argument(
+        "--pipeline",
+        action="store_true",
+        help="Legacy pipeline mode: batch LLM -> file TTS -> play",
+    )
+    parser.add_argument("--speed", type=float, default=1.0, help="Speed multiplier")
     parser.add_argument(
         "--language", type=str, default="English", help="Commentary language"
     )
-    # 1. Capture Team Support
     parser.add_argument(
         "--team_support", type=str, default="Neither", help="Team to support"
     )
@@ -362,17 +567,25 @@ async def main_async():
     with open(args.input) as f:
         events = json.load(f)
 
-    # 2. Pass team_support to Agent
     print(
-        f"ℹ️  Language: {args.language} | Support: {args.team_support}", file=sys.stderr
+        f"ℹ️  Language: {args.language} | Support: {args.team_support}",
+        file=sys.stderr,
     )
     agent = NBACommentaryAgent(language=args.language, team_support=args.team_support)
 
-    if args.pipeline:
-        optimized = merge_close_events(events, threshold=5.0)
+    # Merge events for all modes
+    optimized = merge_close_events(events, threshold=5.0)
+
+    if args.stream:
+        # Streaming mode: LLM tokens -> TTS chunks -> Speaker
+        await process_events_streaming(optimized, agent, args.speed)
+    elif args.pipeline:
+        # Legacy pipeline mode: batch processing with file storage
         await process_events_pipelined(optimized, agent, args.speed)
     else:
-        print("Please use --pipeline", file=sys.stderr)
+        # Default to streaming mode
+        print("Using streaming mode (use --pipeline for legacy mode)", file=sys.stderr)
+        await process_events_streaming(optimized, agent, args.speed)
 
 
 if __name__ == "__main__":
