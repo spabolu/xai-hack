@@ -87,7 +87,7 @@ async def run_streaming_commentary(events, language, team_support, log_placehold
     agent = NBACommentaryAgent(language=language, team_support=team_support)
     optimized = merge_close_events(events, threshold=3)  # Combine events within 5s
 
-    voices = ["leo", "ara", "rex"]
+    voices = ["leo", "eve"]
     voice_idx = 0
     logs = []
     start_time = time.time()  # Track when broadcast started

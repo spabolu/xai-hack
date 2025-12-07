@@ -286,7 +286,7 @@ async def stream_to_speaker(text: str, voice: str = "leo") -> None:
             # Send text
             text_message = {
                 "type": "text_chunk",
-                "data": {"text": text, "is_last": True},
+                "data": {"text": text, "is_last": False},
             }
             await websocket.send(json.dumps(text_message))
 
