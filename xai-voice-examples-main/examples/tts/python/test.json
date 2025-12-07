@@ -1,0 +1,44 @@
+[
+    {
+  "commentary": "\u00a1Falta temprana! Curry comete su primera personal del partido, silbada por Scott Foster. Esto pasa apenas iniciando el juego.",
+  "game_context": {
+   "home_team": "Home Team",
+   "away_team": "Away Team",
+   "home_score": 0,
+   "away_score": 0,
+   "quarter": 1,
+   "time": "11:50"
+  },
+  "excitement_level": 4,
+  "tone": "neutral",
+  "commentator_name": "sal"
+ },
+ {
+  "commentary": "\u00a1Westbrook ataca el aro con un layup en conducci\u00f3n de un metro! \u00a1Anota los dos puntos! Primeros puntos del partido para su equipo.",
+  "game_context": {
+   "home_team": "Home Team",
+   "away_team": "Away Team",
+   "home_score": 2,
+   "away_score": 0,
+   "quarter": 1,
+   "time": "11:46"
+  },
+  "excitement_level": 8,
+  "tone": "excited",
+  "commentator_name": "leo"
+ },
+ {
+  "commentary": "\u00a1Intento de Green con un layup reverso! Pero falla el tiro. El bal\u00f3n rebota fuera, oportunidad perdida para su equipo.",
+  "game_context": {
+   "home_team": "Home Team",
+   "away_team": "Away Team",
+   "home_score": 2,
+   "away_score": 0,
+   "quarter": 1,
+   "time": "11:28"
+  },
+  "excitement_level": 5,
+  "tone": "neutral",
+  "commentator_name": "sal"
+ }
+]
