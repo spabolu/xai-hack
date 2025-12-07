@@ -1285,7 +1285,7 @@ async def main_async():
         
         # --- NEW: Merge events before processing ---
         print("🔄 Optimizing event stream...", file=sys.stderr)
-        optimized_events = merge_close_events(events, threshold=5.0)
+        optimized_events = merge_close_events(events, threshold=3.0)
         
         commentaries = await process_events_pipelined(
             optimized_events,  # Pass the merged list, not the raw list

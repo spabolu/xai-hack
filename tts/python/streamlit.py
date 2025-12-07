@@ -5,10 +5,12 @@ import signal
 import atexit
 import asyncio
 import json
+import time
 
 # Import streaming functions from grok_script
 from grok_script import (
     NBACommentaryAgent,
+    merge_close_events,
     sanitize_text,
     stream_to_speaker,
 )
@@ -83,11 +85,12 @@ async def run_streaming_commentary(events, language, team_support, log_placehold
     Flow: NBA Event -> Grok LLM (token stream) -> TTS (audio chunks) -> Speaker
     """
     agent = NBACommentaryAgent(language=language, team_support=team_support)
-    optimized = events  # Process each event individually (no merging)
+    optimized = merge_close_events(events, threshold=3)  # Combine events within 5s
 
     voices = ["leo", "ara", "rex"]
     voice_idx = 0
     logs = []
+    start_time = time.time()  # Track when broadcast started
 
     for i, event in enumerate(optimized):
         # Check for cancellation
@@ -123,7 +126,15 @@ async def run_streaming_commentary(events, language, team_support, log_placehold
             logs.append("  (empty, skipping)")
             continue
 
-        # 3. Stream to speaker via WebSocket TTS
+        # 3. WAIT until event_time before playing TTS (sync with video)
+        elapsed = time.time() - start_time
+        wait_needed = event_time - elapsed
+        if wait_needed > 0:
+            logs.append(f"  ⏳ Waiting {wait_needed:.1f}s until [{event_time:.1f}s]...")
+            log_placeholder.code("\n".join(logs[-15:]), language="bash")
+            await asyncio.sleep(wait_needed)
+
+        # 4. Stream to speaker via WebSocket TTS (at correct time)
         current_voice = voices[voice_idx % len(voices)]
         voice_idx += 1
 

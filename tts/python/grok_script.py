@@ -401,7 +401,7 @@ async def process_events_streaming(
 # =============================================================================
 
 
-def merge_close_events(events: List[Dict], threshold: float = 8.0) -> List[Dict]:
+def merge_close_events(events: List[Dict], threshold: float = 3.0) -> List[Dict]:
     """Merges events within threshold seconds."""
     if not events:
         return []
@@ -574,7 +574,7 @@ async def main_async():
     agent = NBACommentaryAgent(language=args.language, team_support=args.team_support)
 
     # Merge events for all modes
-    optimized = merge_close_events(events, threshold=5.0)
+    optimized = merge_close_events(events, threshold=3.0)
 
     if args.stream:
         # Streaming mode: LLM tokens -> TTS chunks -> Speaker
