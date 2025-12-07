@@ -10,7 +10,6 @@ import time
 # Import streaming functions from grok_script
 from grok_script import (
     NBACommentaryAgent,
-    merge_close_events,
     stream_tokens_to_speaker,
 )
 
@@ -76,52 +75,37 @@ if "stop_streaming" not in st.session_state:
     st.session_state.stop_streaming = False
 
 
-# --- STREAMING COMMENTARY FUNCTION ---
+# --- REAL-TIME STREAMING COMMENTARY FUNCTION ---
 async def run_streaming_commentary(events, language, team_support, log_placeholder):
     """
-    Run streaming pipeline with real-time Streamlit UI updates.
+    Real-time event simulation with interrupt support.
 
-    Flow: NBA Event -> Grok LLM (token stream) -> TTS WebSocket (audio chunks) -> Speaker
-
-    True token-by-token streaming: audio starts playing while LLM is still generating.
+    Flow:
+    - Clock runs continuously from t=0
+    - Events "arrive" when their timeActual is reached
+    - New events interrupt current speech immediately
+    - No waiting - everything happens in real-time
     """
     agent = NBACommentaryAgent(language=language, team_support=team_support)
-    optimized = merge_close_events(events, threshold=3)  # Combine events within 3s
+
+    # Sort events by time (don't merge - process each as it arrives)
+    pending = sorted(events, key=lambda e: e.get("timeActual", 0))
 
     voices = ["leo", "eve"]
     voice_idx = 0
     logs = []
-    start_time = time.time()  # Track when broadcast started
+    start_time = time.time()
 
-    for i, event in enumerate(optimized):
-        # Check for cancellation
-        if st.session_state.stop_streaming:
-            logs.append("⏹️ Streaming stopped by user")
-            log_placeholder.code("\n".join(logs[-15:]), language="bash")
-            break
+    # Track current speech task
+    current_task = None
 
-        event_time = event.get("timeActual", 0)
-        description = event.get("description", "")[:50]
-
-        # WAIT until event_time before starting (sync with video)
-        elapsed = time.time() - start_time
-        wait_needed = event_time - elapsed
-        if wait_needed > 0:
-            logs.append(f"⏳ Waiting {wait_needed:.1f}s until [{event_time:.1f}s]...")
-            log_placeholder.code("\n".join(logs[-15:]), language="bash")
-            await asyncio.sleep(wait_needed)
-
-        # Update UI with current event
-        current_voice = voices[voice_idx % len(voices)]
-        voice_idx += 1
-        logs.append(f"[{event_time:.1f}s] 🎤 [{current_voice}] {description}")
-        log_placeholder.code("\n".join(logs[-15:]), language="bash")
-
-        # Create a wrapper generator that updates UI as tokens arrive
+    async def speak_event(event, voice):
+        """Speak a single event (runs as background task)."""
+        nonlocal logs
         accumulated_text = ""
 
         async def token_gen_with_ui():
-            nonlocal accumulated_text
+            nonlocal accumulated_text, logs
             try:
                 async for token in agent.process_event_streaming(event):
                     accumulated_text += token
@@ -133,21 +117,96 @@ async def run_streaming_commentary(events, language, team_support, log_placehold
                 logs.append(f"  ❌ LLM Error: {e}")
                 log_placeholder.code("\n".join(logs[-15:]), language="bash")
 
-        # Stream tokens directly to TTS (true real-time: LLM -> TTS simultaneously)
         try:
             spoken_text = await stream_tokens_to_speaker(
-                token_gen_with_ui(), voice=current_voice
+                token_gen_with_ui(), voice=voice
             )
             if spoken_text:
                 logs.append("  ✓ Done")
             else:
                 logs.append("  (empty)")
+        except asyncio.CancelledError:
+            logs.append("  ⚡ Interrupted")
+            raise
         except Exception as e:
             logs.append(f"  ❌ TTS Error: {e}")
 
         log_placeholder.code("\n".join(logs[-15:]), language="bash")
 
-    logs.append("✅ Streaming complete")
+    logs.append(f"🚀 Real-time simulation started ({len(pending)} events)")
+    log_placeholder.code("\n".join(logs[-15:]), language="bash")
+
+    # Main loop: continuous clock simulation
+    while pending or (current_task and not current_task.done()):
+        # Check for user cancellation
+        if st.session_state.stop_streaming:
+            if current_task and not current_task.done():
+                current_task.cancel()
+                try:
+                    await current_task
+                except asyncio.CancelledError:
+                    pass
+            logs.append("⏹️ Stopped by user")
+            log_placeholder.code("\n".join(logs[-15:]), language="bash")
+            break
+
+        elapsed = time.time() - start_time
+
+        # Check which events have "arrived" (timeActual <= elapsed)
+        arrived = []
+        still_pending = []
+        for e in pending:
+            if e.get("timeActual", 0) <= elapsed:
+                arrived.append(e)
+            else:
+                still_pending.append(e)
+        pending = still_pending
+
+        # Process arrived events
+        if arrived:
+            # Take the latest arrived event (most recent)
+            event = arrived[-1]
+            event_time = event.get("timeActual", 0)
+            description = event.get("description", "")[:50]
+
+            # Cancel current speech if running (interrupt)
+            if current_task and not current_task.done():
+                current_task.cancel()
+                try:
+                    await current_task
+                except asyncio.CancelledError:
+                    pass
+
+            # Start new speech
+            current_voice = voices[voice_idx % len(voices)]
+            voice_idx += 1
+            logs.append(f"[{event_time:.1f}s] 🎤 [{current_voice}] {description}")
+            log_placeholder.code("\n".join(logs[-15:]), language="bash")
+
+            current_task = asyncio.create_task(speak_event(event, current_voice))
+
+        # Check if current task finished
+        if current_task and current_task.done():
+            # Retrieve any exception (to avoid "Task exception was never retrieved")
+            try:
+                current_task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+            current_task = None
+
+        # Small tick to let clock advance (50ms)
+        await asyncio.sleep(0.05)
+
+    # Wait for final task to complete
+    if current_task and not current_task.done():
+        try:
+            await current_task
+        except asyncio.CancelledError:
+            pass
+
+    logs.append("✅ Simulation complete")
     log_placeholder.code("\n".join(logs[-15:]), language="bash")
 
 

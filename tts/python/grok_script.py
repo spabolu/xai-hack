@@ -422,42 +422,67 @@ async def stream_tokens_to_speaker(
                 print(f"  Audio recv error: {e}", file=sys.stderr)
                 break
 
+    audio_task = None
+    websocket = None
+
     try:
-        async with websockets.connect(uri, additional_headers=headers) as websocket:
-            # 1. Send config
-            config_message = {"type": "config", "data": {"voice_id": voice}}
-            await websocket.send(json.dumps(config_message))
+        websocket = await websockets.connect(uri, additional_headers=headers)
 
-            # 2. Start audio receiver task (plays audio as it arrives)
-            audio_task = asyncio.create_task(receive_and_play_audio(websocket))
+        # 1. Send config
+        config_message = {"type": "config", "data": {"voice_id": voice}}
+        await websocket.send(json.dumps(config_message))
 
-            # 3. Stream tokens as they come from LLM
-            async for token in token_generator:
-                accumulated_text += token
-                # Send each token to TTS immediately
-                text_message = {
-                    "type": "text_chunk",
-                    "data": {"text": token, "is_last": False},
-                }
-                try:
-                    await websocket.send(json.dumps(text_message))
-                except Exception as e:
-                    print(f"  Token send error: {e}", file=sys.stderr)
-                    break
+        # 2. Start audio receiver task (plays audio as it arrives)
+        audio_task = asyncio.create_task(receive_and_play_audio(websocket))
 
-            # 4. Signal end of text
-            end_message = {
+        # 3. Stream tokens as they come from LLM
+        async for token in token_generator:
+            accumulated_text += token
+            # Send each token to TTS immediately
+            text_message = {
                 "type": "text_chunk",
-                "data": {"text": "", "is_last": True},
+                "data": {"text": token, "is_last": False},
             }
-            await websocket.send(json.dumps(end_message))
+            try:
+                await websocket.send(json.dumps(text_message))
+            except Exception as e:
+                print(f"  Token send error: {e}", file=sys.stderr)
+                break
 
-            # 5. Wait for audio to finish playing
-            await audio_task
+        # 4. Signal end of text
+        end_message = {
+            "type": "text_chunk",
+            "data": {"text": "", "is_last": True},
+        }
+        await websocket.send(json.dumps(end_message))
+
+        # 5. Wait for audio to finish playing
+        await audio_task
+
+    except asyncio.CancelledError:
+        # Interrupted by a new event - clean up gracefully
+        raise  # Re-raise so caller knows it was cancelled
 
     except Exception as e:
         print(f"Streaming TTS error: {e}", file=sys.stderr)
+
     finally:
+        # Cancel audio task if still running
+        if audio_task and not audio_task.done():
+            audio_task.cancel()
+            try:
+                await audio_task
+            except asyncio.CancelledError:
+                pass
+
+        # Close websocket
+        if websocket:
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+
+        # Clean up PyAudio
         audio_stream.stop_stream()
         audio_stream.close()
         p.terminate()
