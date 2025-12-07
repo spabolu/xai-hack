@@ -13,7 +13,6 @@ st.title("🏀 Grok Real-Time NBA Commentary")
 st.markdown("### AI-Powered Live Sports Narration")
 
 # --- SESSION STATE MANAGEMENT ---
-# We use session state to keep track of the background process
 if "process" not in st.session_state:
     st.session_state.process = None
 if "is_running" not in st.session_state:
@@ -35,15 +34,38 @@ with st.container():
             "2. Select Commentary Language", ["English", "Spanish", "French"], index=0
         )
 
-# --- UI SECTION 2: TEAM SELECTION (Conditional) ---
+# --- UI SECTION 2: DYNAMIC CONFIGURATION ---
 if youtube_url:
+    # --- LOGIC: Map URL to JSON File and Team Options ---
+
+    # Default Fallback
+    team_options = ["Home Team", "Away Team", "Neither (Neutral)"]
+    input_json_file = "gameplay.json"
+
+    # Case 1: Grizzlies vs Magic
+    if "J8WABIinM64" in youtube_url:
+        team_options = ["Memphis Grizzlies", "Orlando Magic", "Neither (Neutral)"]
+        input_json_file = "magicvgrizzlies.json"
+
+    # https://www.youtube.com/watch?v=It8h_JhEREw
+    # Case 2: Lakers vs Clippers
+
+
+    elif "L7o4UCIIqS4" in youtube_url:
+        team_options = [
+            "Milwuakee Bucks",
+            "San Antonio Spurs",
+            "Neither (Neutral)",
+        ]
+        input_json_file = "bucksvspurs.json"
+
     st.divider()
     st.subheader("3. Select Your Team")
 
     # 3. Team Support Selection
     team_support = st.radio(
         "Who do you want the commentators to support?",
-        ["Memphis Grizzlies", "Orlando Magic", "Neither (Neutral)"],
+        team_options,
         horizontal=True,
     )
 
@@ -73,30 +95,36 @@ if youtube_url:
         with video_col:
             st.info(f"Broadcast started! Supporting: **{team_support}**")
 
-            # 2. Display YouTube (Muted + Autoplay)
-            # Note: Browser policies may block autoplay if not muted.
-            # We explicitly set muted=True to ensure autoplay works.
-            st.video(youtube_url, autoplay=True, muted=True)
+            # --- START TIME LOGIC ---
+            start_time = 0
+            # If Lakers vs Clippers, start at 2:58 (178 seconds)
+            if "L7o4UCIIqS4" in youtube_url:
+                start_time = 8
+
+            # 2. Display YouTube (Muted + Autoplay + Start Time)
+            st.video(youtube_url, autoplay=True, muted=True, start_time=start_time)
+
+            # UX Warning for the edge case where autoplay fails
+            st.caption(
+                "⚠️ Note: If video does not autoplay, please click play immediately to sync with audio."
+            )
 
         with log_col:
             st.write("🎙️ **Live Audio Feed**")
             log_placeholder = st.empty()
 
-            # 3. Execute Script
-            # We add the --language argument dynamically based on user selection
+            # 3. Execute Script with Dynamic JSON File
             command = [
                 sys.executable,
                 "grok_script.py",
                 "--input",
-                "gameplay.json",
+                input_json_file,
                 "--pipeline",
                 "--language",
-                language,  # Pass the variable from st.selectbox
+                language,
+                "--team_support",
+                team_support,
             ]
-
-            # Pass environment variables if needed (e.g. for language/team)
-            # env = os.environ.copy()
-            # env["USER_TEAM"] = team_support
 
             try:
                 process = subprocess.Popen(

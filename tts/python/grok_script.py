@@ -30,8 +30,8 @@ class Config:
 
     XAI_API_KEY: Optional[str] = os.getenv("XAI_API_KEY")
     GROK_MODEL: str = os.getenv("GROK_MODEL", "grok-4-1-fast-non-reasoning")
-    TEMPERATURE: float = 0.6  # Lower temp = less creative/hallucinogenic
-    MAX_TOKENS: int = 100  # Default fallback
+    TEMPERATURE: float = 0.7  # Slightly higher for more emotional variance
+    MAX_TOKENS: int = 100
     THREAD_ID: str = os.getenv("THREAD_ID", "nba-commentary-default")
 
     @classmethod
@@ -53,16 +53,14 @@ class CommentaryOutput(BaseModel):
 
 
 # =============================================================================
-# Text Sanitizer (The "Wow" Killer)
+# Text Sanitizer
 # =============================================================================
 
 
 def sanitize_text(text: str) -> str:
     """
-    Aggressively strips forbidden cliches and commentator names from the start of text.
-    Recursive to catch cases like "Leo: Wow! Oh my gosh! The play..."
+    Aggressively strips forbidden cliches and commentator names.
     """
-    # 1. Names to strip
     names = [
         "Ara",
         "Eve",
@@ -75,18 +73,11 @@ def sanitize_text(text: str) -> str:
         "Play-by-play",
         "Color",
     ]
-    # 2. Cliches to strip (Case insensitive)
     banned_starts = [
         "Wow",
         "Wow!",
-        "WOW!",
-        "WOW",
         "Oh my gosh",
         "Oh my god",
-        "Oh my gosh,",
-        "Oh my gosh!",
-        "Oh my gosh!!",
-        "Oh my gosh!!!",
         "Geez",
         "Unbelievable",
         "Incredible",
@@ -101,22 +92,16 @@ def sanitize_text(text: str) -> str:
     ]
 
     original = text
-
-    # Simple regex to remove Name: prefix
     text = re.sub(r"^(" + "|".join(names) + r")\s*:\s*", "", text, flags=re.IGNORECASE)
 
-    # Loop to remove multiple stacked cliches (e.g. "Wow! My goodness!")
     while True:
         prev_text = text
         for phrase in banned_starts:
-            # Matches "Wow" "Wow," "Wow!" "Wow..." at start of string
             pattern = r"^\s*" + re.escape(phrase) + r"[!.,]*\s*"
             text = re.sub(pattern, "", text, flags=re.IGNORECASE)
-
         if text == prev_text:
-            break  # No changes made, we are clean
+            break
 
-    # Capitalize first letter if it got messed up
     if text and text[0].islower():
         text = text[0].upper() + text[1:]
 
@@ -129,9 +114,9 @@ def sanitize_text(text: str) -> str:
 
 
 class NBACommentaryAgent:
-    """AI Agent for generating NBA game commentary."""
+    """AI Agent for generating NBA game commentary with specific team bias."""
 
-    def __init__(self, language: str = "en"):
+    def __init__(self, language: str = "en", team_support: str = "Neither"):
         Config.validate()
 
         from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
@@ -144,32 +129,48 @@ class NBACommentaryAgent:
             temperature=Config.TEMPERATURE,
         )
 
-        self.language = language # Store the language        
-        # Map common names to full prompt instructions if needed
-        lang_instruction = "English"
-        if language.lower().startswith("sp"): lang_instruction = "Spanish (Español)"
-        elif language.lower().startswith("fr"): lang_instruction = "French (Français)"
+        self.language = language
 
-        self.system_prompt = f"""You are a professional NBA TV broadcaster. 
+        # 1. Determine Language Instruction
+        lang_instruction = "English"
+        if language.lower().startswith("sp"):
+            lang_instruction = "Spanish (Español)"
+        elif language.lower().startswith("fr"):
+            lang_instruction = "French (Français)"
+
+        # 2. Determine Persona based on Team Support
+        if "neither" in team_support.lower() or "neutral" in team_support.lower():
+            persona = "You are a professional, NEUTRAL NBA TV broadcaster."
+            bias_instruction = (
+                "Maintain objectivity. Get excited for big plays by EITHER team."
+            )
+        else:
+            persona = f"You are a DIE-HARD, BIASED fan commentator for the **{team_support}**."
+            bias_instruction = f"""
+            **BIAS RULES:**
+            - If **{team_support}** scores/steals/blocks: BE ECSTATIC. Use words like "Yes!", "Finally!", "Beautiful!".
+            - If the OPPONENT scores: BE SAD, FRUSTRATED, or DISMISSIVE. (e.g., "Ugh, lucky shot," "Defense is sleeping.").
+            - Never praise the opponent enthusiastically.
+            """
+
+        self.system_prompt = f"""{persona}
 Your goal is to provide play-by-play commentary that is TIGHT, PUNCHY, and SYNCED.
 
 IMPORTANT: Generate all commentary in **{lang_instruction}**.
 
+{bias_instruction}
+
 CRITICAL RULES:
-1. MAX 6 WORDS per output. No exceptions.
-2. START IMMEDIATELY: Do not use "Wow", "Oh my gosh". Start with the action.
+1. MAX 8 WORDS per output. No exceptions.
+2. START IMMEDIATELY: Do not use "Wow", "Oh my gosh".
 3. BE FAST: Subject + Verb + Result.
 """
 
     def process_event(
-        self, event: Dict[str, Any], time_budget: float = 10.0, max_tokens: int = 25
+        self, event: Dict[str, Any], time_budget: float = 10.0, max_tokens: int = 30
     ) -> CommentaryOutput:
-        """
-        Process event with a HARD 6-word limit for maximum speed.
-        """
-        # FORCE 6 WORDS regardless of time budget
-        len_instruction = "STRICT LIMIT: Maximum 6 words."
-
+        # FORCE 6 WORDS
+        len_instruction = "STRICT LIMIT: Maximum 8 words."
         description = event.get("description", "Play happening")
 
         prompt = f"""
@@ -178,16 +179,16 @@ CRITICAL RULES:
     OUTPUT: Just the spoken commentary.
     """
 
-        # Call LLM with very low token limit
         response = self.llm.invoke(
             [("system", self.system_prompt), ("human", prompt)],
             max_tokens=max_tokens,
         )
 
-        # Basic parsing
         text = response.content
 
-        # Determine excitement based on keywords
+        # Excitement logic
+        # If biased, we might want to manually adjust excitement later,
+        # but for now, we let the text carry the emotion.
         excitement = "high enthusiasm"
         # if any(w in description.lower() for w in ["dunk", "3pt", "steal", "block"]):
         #     excitement = "high"
@@ -201,42 +202,27 @@ CRITICAL RULES:
 
 
 # =============================================================================
-# Helper Functions
+# Pipeline Logic (Unchanged Helpers omitted for brevity)
 # =============================================================================
 
 
 def merge_close_events(events: List[Dict], threshold: float = 8.0) -> List[Dict]:
-    """
-    Aggressively merges events within `threshold` seconds (Default 8s).
-    This ensures we have bigger 'chunks' of time to speak, preventing overlap.
-    """
+    """Merges events within threshold seconds."""
     if not events:
         return []
     merged = []
     batch = [events[0]]
-
     for i in range(1, len(events)):
         curr = events[i]
         prev = batch[-1]
-
-        # Check time diff between current event and the START of the batch
-        # This prevents a "creeping" batch that gets too long
-        batch_start_time = batch[0].get("timeActual", 0)
-        curr_time = curr.get("timeActual", 0)
-
-        if (curr_time - batch_start_time) < threshold:
+        if (curr.get("timeActual", 0) - batch[0].get("timeActual", 0)) < threshold:
             batch.append(curr)
         else:
             merged.append(_create_merged_event(batch))
             batch = [curr]
-
     if batch:
         merged.append(_create_merged_event(batch))
-
-    print(
-        f"📉 Optimized: {len(events)} events -> {len(merged)} sequences.",
-        file=sys.stderr,
-    )
+    print(f"📉 Optimized: {len(events)} -> {len(merged)} sequences.", file=sys.stderr)
     return merged
 
 
@@ -244,32 +230,20 @@ def _create_merged_event(batch: List[Dict]) -> Dict:
     if len(batch) == 1:
         return batch[0]
     final = batch[-1].copy()
-
-    # Join descriptions
     descs = [e.get("description", "") for e in batch if e.get("description")]
     final["description"] = " -> ".join(descs)
     return final
 
 
-# =============================================================================
-# Pipeline Logic
-# =============================================================================
-
-
 async def process_events_pipelined(
     events: List[Dict], agent: NBACommentaryAgent, speed_multiplier: float = 1.0
 ):
-    """
-    Smart Pipeline with Sanitization and Timing Enforcement.
-    """
     import asyncio
     from tts import text_to_speech_excited
     import subprocess
     import time
 
-    # 1. Setup
     script_queue = asyncio.Queue()
-    # Use absolute path to avoid duplication with tts.py's OUTPUT_DIR
     audio_dir = Path(__file__).parent.parent / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
 
@@ -277,7 +251,6 @@ async def process_events_pipelined(
         f"🚀 Starting Commentary Pipeline (Speed: {speed_multiplier}x)", file=sys.stderr
     )
 
-    # --- CONSUMER (TTS & Playback) ---
     async def voice_worker():
         while True:
             item = await script_queue.get()
@@ -286,8 +259,6 @@ async def process_events_pipelined(
                 break
 
             text, voice, event_id, excitement = item
-
-            # THE "WOW" KILLER: Sanitize text before TTS
             clean_text = sanitize_text(text)
 
             if not clean_text:
@@ -298,7 +269,6 @@ async def process_events_pipelined(
             path = str(audio_dir / filename)
 
             try:
-                # Generate
                 print(f"🎵 Gen: {clean_text[:40]}...", file=sys.stderr)
                 await asyncio.to_thread(
                     text_to_speech_excited,
@@ -307,12 +277,11 @@ async def process_events_pipelined(
                     output_file=path,
                     excitement_level=excitement,
                 )
-
-                # Play (Blocking, ensuring sequential playback)
-                # The Brain worker is still running ahead!
                 print(f"🔊 Speaking: {clean_text[:40]}...", file=sys.stderr)
-                await asyncio.to_thread(subprocess.run, ["afplay", path], check=False)
-
+                # Playing fast to catch up
+                await asyncio.to_thread(
+                    subprocess.run, ["afplay", "--rate", "1.3", path], check=False
+                )
             except Exception as e:
                 print(f"❌ Audio Error: {e}", file=sys.stderr)
 
@@ -320,45 +289,30 @@ async def process_events_pipelined(
 
     voice_task = asyncio.create_task(voice_worker())
 
-    # --- PRODUCER (Grok) ---
     last_event_time = 0.0
-
-    # Commentator rotation
     voices = ["Leo", "Ara", "Rex"]
     voice_idx = 0
 
     for i, event in enumerate(events):
         event_time = event.get("timeActual", 0)
 
-        # 1. Calculate Budget
-        # Look at next event to see how much time we have
         if i + 1 < len(events):
             next_time = events[i + 1].get("timeActual", 0)
             time_budget = next_time - event_time
         else:
             time_budget = 10.0
 
-        # 2. Hard Limits
-        # Avg speaking rate: 3 words/sec. Safe limit: 2.5 words/sec.
-        # Approx 1.3 tokens per word -> 3.25 tokens/sec
         safe_token_limit = 25
-
-        # 3. Pacing Wait
         wait_time = (event_time - last_event_time) / speed_multiplier
         if wait_time > 0 and i > 0:
             await asyncio.sleep(wait_time)
         last_event_time = event_time
 
-        # 4. Generate
-        # If backlog is high, skip non-critical events
         if script_queue.qsize() >= 1 and time_budget < 5.0:
             print(f"⏩ Skipping tight window ({time_budget:.1f}s)...", file=sys.stderr)
             continue
 
-        print(
-            f"📝 [Time: {event_time:.1f}] Generating (Budget: {time_budget:.1f}s)...",
-            file=sys.stderr,
-        )
+        print(f"📝 [Time: {event_time:.1f}] Generating...", file=sys.stderr)
 
         try:
             commentary = await asyncio.wait_for(
@@ -366,19 +320,15 @@ async def process_events_pipelined(
                     agent.process_event,
                     event,
                     time_budget=time_budget,
-                    max_tokens=safe_token_limit,  # Force brevity
+                    max_tokens=safe_token_limit,
                 ),
                 timeout=10.0,
             )
-
-            # Rotate voice
             current_voice = voices[voice_idx % len(voices)]
             voice_idx += 1
-
             await script_queue.put(
                 (commentary.commentary, current_voice, i, commentary.excitement_level)
             )
-
         except Exception as e:
             print(f"❌ Grok Error: {e}", file=sys.stderr)
 
@@ -396,31 +346,33 @@ async def main_async():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
-    parser.add_argument(
-        "--pipeline", action="store_true", help="Run optimized pipeline"
-    )
+    parser.add_argument("--pipeline", action="store_true")
     parser.add_argument("--speed", type=float, default=1.0)
-    # 1. We capture the language argument here
     parser.add_argument(
         "--language", type=str, default="English", help="Commentary language"
     )
+    # 1. Capture Team Support
+    parser.add_argument(
+        "--team_support", type=str, default="Neither", help="Team to support"
+    )
+
     args = parser.parse_args()
 
     print(f"📂 Loading {args.input}...", file=sys.stderr)
     with open(args.input) as f:
         events = json.load(f)
 
-    # 2. CRITICAL FIX: Pass args.language to the class init
-    agent = NBACommentaryAgent(language=args.language)
+    # 2. Pass team_support to Agent
+    print(
+        f"ℹ️  Language: {args.language} | Support: {args.team_support}", file=sys.stderr
+    )
+    agent = NBACommentaryAgent(language=args.language, team_support=args.team_support)
 
     if args.pipeline:
-        # Merge events closer than 8 seconds to allow TTS time to finish
-        print(f"🔄 Optimizing event stream for {args.language}...", file=sys.stderr)
         optimized = merge_close_events(events, threshold=5.0)
-
         await process_events_pipelined(optimized, agent, args.speed)
     else:
-        print("Please use --pipeline for this script version.", file=sys.stderr)
+        print("Please use --pipeline", file=sys.stderr)
 
 
 if __name__ == "__main__":
