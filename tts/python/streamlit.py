@@ -11,8 +11,7 @@ import time
 from grok_script import (
     NBACommentaryAgent,
     merge_close_events,
-    sanitize_text,
-    stream_to_speaker,
+    stream_tokens_to_speaker,
 )
 
 # Page Config
@@ -82,10 +81,12 @@ async def run_streaming_commentary(events, language, team_support, log_placehold
     """
     Run streaming pipeline with real-time Streamlit UI updates.
 
-    Flow: NBA Event -> Grok LLM (token stream) -> TTS (audio chunks) -> Speaker
+    Flow: NBA Event -> Grok LLM (token stream) -> TTS WebSocket (audio chunks) -> Speaker
+
+    True token-by-token streaming: audio starts playing while LLM is still generating.
     """
     agent = NBACommentaryAgent(language=language, team_support=team_support)
-    optimized = merge_close_events(events, threshold=3)  # Combine events within 5s
+    optimized = merge_close_events(events, threshold=3)  # Combine events within 3s
 
     voices = ["leo", "eve"]
     voice_idx = 0
@@ -102,50 +103,49 @@ async def run_streaming_commentary(events, language, team_support, log_placehold
         event_time = event.get("timeActual", 0)
         description = event.get("description", "")[:50]
 
-        # Update UI with current event
-        logs.append(f"[{event_time:.1f}s] {description}...")
-        log_placeholder.code("\n".join(logs[-15:]), language="bash")
-
-        # 1. Stream tokens from Grok LLM
-        text = ""
-        try:
-            async for token in agent.process_event_streaming(event):
-                text += token
-                # Update UI with streaming tokens
-                current_log = logs[-1] if logs else ""
-                display_logs = logs[:-1] + [f"{current_log}\n  LLM: {text}"]
-                log_placeholder.code("\n".join(display_logs[-15:]), language="bash")
-        except Exception as e:
-            logs.append(f"  LLM Error: {e}")
-            log_placeholder.code("\n".join(logs[-15:]), language="bash")
-            continue
-
-        # 2. Sanitize text
-        clean_text = sanitize_text(text)
-        if not clean_text:
-            logs.append("  (empty, skipping)")
-            continue
-
-        # 3. WAIT until event_time before playing TTS (sync with video)
+        # WAIT until event_time before starting (sync with video)
         elapsed = time.time() - start_time
         wait_needed = event_time - elapsed
         if wait_needed > 0:
-            logs.append(f"  ⏳ Waiting {wait_needed:.1f}s until [{event_time:.1f}s]...")
+            logs.append(f"⏳ Waiting {wait_needed:.1f}s until [{event_time:.1f}s]...")
             log_placeholder.code("\n".join(logs[-15:]), language="bash")
             await asyncio.sleep(wait_needed)
 
-        # 4. Stream to speaker via WebSocket TTS (at correct time)
+        # Update UI with current event
         current_voice = voices[voice_idx % len(voices)]
         voice_idx += 1
-
-        logs.append(f"  🔊 [{current_voice}]: {clean_text[:40]}...")
+        logs.append(f"[{event_time:.1f}s] 🎤 [{current_voice}] {description}")
         log_placeholder.code("\n".join(logs[-15:]), language="bash")
 
+        # Create a wrapper generator that updates UI as tokens arrive
+        accumulated_text = ""
+
+        async def token_gen_with_ui():
+            nonlocal accumulated_text
+            try:
+                async for token in agent.process_event_streaming(event):
+                    accumulated_text += token
+                    # Update UI with streaming tokens
+                    display_logs = logs[:-1] + [f"{logs[-1]}\n  💬 {accumulated_text}"]
+                    log_placeholder.code("\n".join(display_logs[-15:]), language="bash")
+                    yield token
+            except Exception as e:
+                logs.append(f"  ❌ LLM Error: {e}")
+                log_placeholder.code("\n".join(logs[-15:]), language="bash")
+
+        # Stream tokens directly to TTS (true real-time: LLM -> TTS simultaneously)
         try:
-            await stream_to_speaker(clean_text, voice=current_voice)
+            spoken_text = await stream_tokens_to_speaker(
+                token_gen_with_ui(), voice=current_voice
+            )
+            if spoken_text:
+                logs.append("  ✓ Done")
+            else:
+                logs.append("  (empty)")
         except Exception as e:
-            logs.append(f"  TTS Error: {e}")
-            log_placeholder.code("\n".join(logs[-15:]), language="bash")
+            logs.append(f"  ❌ TTS Error: {e}")
+
+        log_placeholder.code("\n".join(logs[-15:]), language="bash")
 
     logs.append("✅ Streaming complete")
     log_placeholder.code("\n".join(logs[-15:]), language="bash")

@@ -321,6 +321,150 @@ async def stream_to_speaker(text: str, voice: str = "leo") -> None:
         p.terminate()
 
 
+async def stream_tokens_to_speaker(
+    token_generator: AsyncGenerator[str, None],
+    voice: str = "leo",
+) -> str:
+    """
+    Stream LLM tokens directly to TTS WebSocket as they arrive.
+
+    This enables true real-time streaming: audio starts playing
+    while the LLM is still generating tokens.
+
+    Args:
+        token_generator: Async generator yielding LLM tokens
+        voice: Voice ID (ara, rex, sal, eve, una, leo)
+
+    Returns:
+        The accumulated text that was spoken
+    """
+    import websockets
+
+    # Try to import pyaudio
+    try:
+        import pyaudio
+    except ImportError:
+        print("Warning: PyAudio not available, audio will not play", file=sys.stderr)
+        # Still consume the generator to get the text
+        text = ""
+        async for token in token_generator:
+            text += token
+        return text
+
+    api_key = Config.XAI_API_KEY
+    if not api_key:
+        raise ValueError("XAI_API_KEY not found")
+
+    # WebSocket TTS endpoint
+    base_url = os.getenv("BASE_URL", "https://api.x.ai/v1")
+    ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://")
+    uri = f"{ws_url}/realtime/audio/speech"
+
+    # Audio settings (24kHz, mono, 16-bit PCM)
+    sample_rate = 24000
+    channels = 1
+
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    # Initialize PyAudio
+    p = pyaudio.PyAudio()
+    audio_stream = p.open(
+        format=pyaudio.paInt16,
+        channels=channels,
+        rate=sample_rate,
+        output=True,
+    )
+
+    accumulated_text = ""
+
+    async def receive_and_play_audio(websocket):
+        """Receive audio chunks and play them as they arrive."""
+        while True:
+            try:
+                response = await asyncio.wait_for(websocket.recv(), timeout=0.5)
+                data = json.loads(response)
+
+                # Handle different message types
+                msg_type = data.get("type", "")
+                if msg_type == "error":
+                    error_msg = data.get("error", {}).get("message", "Unknown error")
+                    print(f"  TTS API error: {error_msg}", file=sys.stderr)
+                    break
+
+                # Try to extract audio data
+                try:
+                    audio_data = data.get("data", {}).get("data", {})
+                    audio_b64 = audio_data.get("audio")
+                    is_last = audio_data.get("is_last", False)
+
+                    if not audio_b64:
+                        # Not an audio message, skip
+                        continue
+
+                    # Decode and play immediately
+                    chunk_bytes = base64.b64decode(audio_b64)
+                    if len(chunk_bytes) > 0:
+                        await asyncio.to_thread(audio_stream.write, chunk_bytes)
+
+                    if is_last:
+                        break
+                except (KeyError, TypeError):
+                    # Not an audio message format, skip
+                    continue
+
+            except asyncio.TimeoutError:
+                continue
+            except websockets.exceptions.ConnectionClosedOK:
+                break
+            except websockets.exceptions.ConnectionClosedError:
+                break
+            except Exception as e:
+                print(f"  Audio recv error: {e}", file=sys.stderr)
+                break
+
+    try:
+        async with websockets.connect(uri, additional_headers=headers) as websocket:
+            # 1. Send config
+            config_message = {"type": "config", "data": {"voice_id": voice}}
+            await websocket.send(json.dumps(config_message))
+
+            # 2. Start audio receiver task (plays audio as it arrives)
+            audio_task = asyncio.create_task(receive_and_play_audio(websocket))
+
+            # 3. Stream tokens as they come from LLM
+            async for token in token_generator:
+                accumulated_text += token
+                # Send each token to TTS immediately
+                text_message = {
+                    "type": "text_chunk",
+                    "data": {"text": token, "is_last": False},
+                }
+                try:
+                    await websocket.send(json.dumps(text_message))
+                except Exception as e:
+                    print(f"  Token send error: {e}", file=sys.stderr)
+                    break
+
+            # 4. Signal end of text
+            end_message = {
+                "type": "text_chunk",
+                "data": {"text": "", "is_last": True},
+            }
+            await websocket.send(json.dumps(end_message))
+
+            # 5. Wait for audio to finish playing
+            await audio_task
+
+    except Exception as e:
+        print(f"Streaming TTS error: {e}", file=sys.stderr)
+    finally:
+        audio_stream.stop_stream()
+        audio_stream.close()
+        p.terminate()
+
+    return accumulated_text
+
+
 # =============================================================================
 # Streaming Pipeline (LLM Tokens -> TTS Audio Chunks -> Speaker)
 # =============================================================================
