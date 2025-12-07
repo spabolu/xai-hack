@@ -4,6 +4,7 @@ import sys
 import os
 import time
 import signal
+import atexit
 
 # Page Config
 st.set_page_config(page_title="Grok NBA Commentary", page_icon="🏀", layout="wide")
@@ -11,6 +12,50 @@ st.set_page_config(page_title="Grok NBA Commentary", page_icon="🏀", layout="w
 # Title and Header
 st.title("🏀 Grok Real-Time NBA Commentary")
 st.markdown("### AI-Powered Live Sports Narration")
+
+# --- CLEANUP LOGIC ---
+PID_FILE = "crowd_pid.txt"
+
+
+def kill_all_processes():
+    """
+    Forcefully kills ALL background processes on refresh/exit.
+    1. Kills 'afplay' (Crowd Noise + TTS Audio)
+    2. Kills 'grok_script.py' (The Commentary Engine)
+    """
+    # 1. Kill Audio Players
+    try:
+        subprocess.run(["pkill", "-f", "afplay"], check=False)
+    except Exception:
+        pass
+
+    # 2. Kill Commentary Script
+    try:
+        # -f matches the command line name
+        subprocess.run(["pkill", "-f", "grok_script.py"], check=False)
+    except Exception:
+        pass
+
+    # 3. Cleanup PID file if it exists
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE, "r") as f:
+                pid = int(f.read().strip())
+            os.killpg(pid, signal.SIGTERM)
+            os.remove(PID_FILE)
+        except Exception:
+            pass
+
+
+# 1. Register cleanup on server exit (Ctrl+C)
+atexit.register(kill_all_processes)
+
+# 2. Run cleanup on startup (Handle page refreshes)
+# This effectively "Restarts" the backend state when the frontend reloads.
+if "cleanup_done" not in st.session_state:
+    kill_all_processes()
+    st.session_state.cleanup_done = True
+
 
 # --- SESSION STATE MANAGEMENT ---
 if "process" not in st.session_state:
@@ -115,10 +160,6 @@ if youtube_url:
             # 2. Display YouTube (Muted + Autoplay + Start Time)
             st.video(youtube_url, autoplay=True, muted=True, start_time=start_time)
 
-            # UX Warning for the edge case where autoplay fails
-            st.caption(
-                "⚠️ Note: If video does not autoplay, please click play immediately to sync with audio."
-            )
 
         with log_col:
             st.write("🎙️ **Live Audio Feed**")
