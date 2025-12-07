@@ -129,7 +129,11 @@ async def run_streaming_commentary(events, language, team_support, log_placehold
             logs.append("  ⚡ Interrupted")
             raise
         except Exception as e:
-            logs.append(f"  ❌ TTS Error: {e}")
+            # Check if this is the PortAudio error after interrupt
+            if "PortAudio" in str(e) or "-9986" in str(e):
+                logs.append("  ⚡ New event override")
+            else:
+                logs.append(f"  ❌ TTS Error: {e}")
 
         log_placeholder.code("\n".join(logs[-15:]), language="bash")
 
