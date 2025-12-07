@@ -1,60 +1,54 @@
-# Grok NBA Commentary - Architecture
+# GrokCast NBA Architecture
 
-## Data Flow (Current Pipeline)
-
-```mermaid
-flowchart LR
-    JSON[("NBA Events<br/>JSON")] --> MERGE["Merge Events"]
-    MERGE --> GROK["Grok LLM"]
-    GROK --> TTS["xAI TTS"]
-    TTS --> PLAY["🔊 Speaker"]
-```
-
-## Streaming Flow (Low Latency)
+## How It Works
 
 ```mermaid
 flowchart LR
-    subgraph STREAM["⚡ Real-Time Streaming"]
-        EVENT["NBA Event"] --> LLM["Grok LLM"]
-        LLM -->|"token stream"| TTS["Streaming TTS<br/>(WebSocket)"]
-        TTS -->|"audio chunks"| SPEAKER["🔊 Speaker"]
+    subgraph Input
+        A[📺 NBA Game Data]
+        B[🏀 Your Team]
+        C[🌍 Language]
     end
-    
-    style STREAM fill:#e8f5e9
+
+    subgraph "Grok AI (xAI)"
+        D[🧠 Grok 4.1\nCommentary]
+        E[🔍 X Search\nPlayer Stats]
+    end
+
+    subgraph Output
+        F[🎙️ Grok Voice\nTTS]
+        G[🔊 Live Audio]
+    end
+
+    A --> D
+    B --> D
+    C --> D
+    D -->|tokens| F
+    E -->|filler| F
+    F -->|stream| G
 ```
 
-## Latency Comparison
+## Simple Flow
 
 ```mermaid
-gantt
-    title Audio Latency Comparison
-    dateFormat X
-    axisFormat %s
+flowchart TD
+    A[Game Event Happens] --> B{Is TTS busy?}
+    B -->|No| C[Generate Commentary]
+    B -->|Yes| D[Interrupt Current Speech]
+    D --> C
+    C --> E[Stream to Voice]
+    E --> F[Play Audio]
     
-    section Batch Mode
-    LLM Generation     :0, 15
-    TTS Generation     :15, 20
-    Audio Playback     :20, 25
-    
-    section Streaming Mode
-    LLM Tokens         :0, 15
-    TTS Chunks         :1, 16
-    Audio Playing      :2, 17
+    G[No Event?] --> H[Search Player Stats]
+    H --> E
 ```
 
-## Key Components
-
-| Component | Mode | Latency |
-|-----------|------|---------|
-| `grok_script.py` | Batch | ~5s to first audio |
-| `streaming_tts.py` | WebSocket | ~200ms to first audio |
-
-## Streaming Advantage
+## Real-Time Pipeline
 
 ```
-Batch:     [===LLM===][===TTS===][===PLAY===]  → 5+ seconds
-Streaming: [=LLM=====]                          → 200ms
-            [=TTS====]
-             [=PLAY===]
+NBA Play-by-Play  →  Grok 4.1 LLM  →  Grok Voice TTS  →  Speaker
+     (JSON)           (tokens)         (WebSocket)       (audio)
+                          ↓
+                    X Search fills
+                    quiet moments
 ```
-
