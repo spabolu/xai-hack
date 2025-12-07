@@ -1,0 +1,318 @@
+[
+  {
+    "commentators": [
+      {
+        "name": "eve",
+        "role": "play_by_play",
+        "line": "Jump ball at center court, Adams versus Bogut. Adams tips it back, and Ibaka wins possession for the home team to start the game!",
+        "tone": "excited",
+        "excitement_level": "medium"
+      }
+    ],
+    "game_context": {
+      "home_team": null,
+      "away_team": null,
+      "home_score": null,
+      "away_score": null,
+      "leader": null,
+      "score_diff": null,
+      "quarter": 1,
+      "clock": "Q1 12:00",
+      "elapsed_minutes": 0.0,
+      "possession": "home"
+    },
+    "notes": null
+  },
+  {
+    "commentators": [
+      {
+        "name": "eve",
+        "role": "play_by_play",
+        "line": "Early foul on Stephen Curry, his first personal, called by Scott Foster. Just 10 seconds in!",
+        "tone": "neutral",
+        "excitement_level": "low"
+      }
+    ],
+    "game_context": {
+      "home_team": null,
+      "away_team": null,
+      "home_score": null,
+      "away_score": null,
+      "leader": null,
+      "score_diff": null,
+      "quarter": 1,
+      "clock": "Q1 11:50",
+      "elapsed_minutes": 0.17,
+      "possession": "home"
+    },
+    "notes": null
+  },
+  {
+    "commentators": [
+      {
+        "name": "eve",
+        "role": "play_by_play",
+        "line": "Westbrook drives hard to the rim and finishes with the layup! Early bucket for the home team, 2-0!",
+        "tone": "excited",
+        "excitement_level": "medium"
+      },
+      {
+        "name": "leo",
+        "role": "color",
+        "line": "That's vintage Westbrook, attacking right out of the gate after that tip.",
+        "tone": "analytical",
+        "excitement_level": "medium"
+      }
+    ],
+    "game_context": {
+      "home_team": null,
+      "away_team": null,
+      "home_score": 2,
+      "away_score": 0,
+      "leader": "home",
+      "score_diff": 2,
+      "quarter": 1,
+      "clock": "Q1 11:46",
+      "elapsed_minutes": 0.23,
+      "possession": "away"
+    },
+    "notes": null
+  },
+  {
+    "commentators": [
+      {
+        "name": "eve",
+        "role": "play_by_play",
+        "line": "Draymond Green with the reverse layup attempt... it's off the mark! No good.",
+        "tone": "neutral",
+        "excitement_level": "low"
+      }
+    ],
+    "game_context": {
+      "home_team": null,
+      "away_team": null,
+      "home_score": 2,
+      "away_score": 0,
+      "leader": "home",
+      "score_diff": 2,
+      "quarter": 1,
+      "clock": "Q1 11:28",
+      "elapsed_minutes": 0.53,
+      "possession": "home"
+    },
+    "notes": null
+  },
+  {
+    "commentators": [
+      {
+        "name": "eve",
+        "role": "play_by_play",
+        "line": "Durant cleans up the miss with the defensive rebound for the home team.",
+        "tone": "neutral",
+        "excitement_level": "low"
+      }
+    ],
+    "game_context": {
+      "home_team": null,
+      "away_team": null,
+      "home_score": 2,
+      "away_score": 0,
+      "leader": "home",
+      "score_diff": 2,
+      "quarter": 1,
+      "clock": "Q1 11:27",
+      "elapsed_minutes": 0.55,
+      "possession": "home"
+    },
+    "notes": null
+  },
+  {
+    "commentators": [
+      {
+        "name": "ara",
+        "role": "play_by_play",
+        "line": "Durant lets it fly from 25 feet... swish! Three points, assisted by Adams. Home team up 5-0 early!",
+        "tone": "excited",
+        "excitement_level": "medium"
+      },
+      {
+        "name": "leo",
+        "role": "color",
+        "line": "Beautiful spacing there, Durant pulling up with confidence after the rebound.",
+        "tone": "analytical",
+        "excitement_level": "medium"
+      }
+    ],
+    "game_context": {
+      "home_team": null,
+      "away_team": null,
+      "home_score": 5,
+      "away_score": 0,
+      "leader": "home",
+      "score_diff": 5,
+      "quarter": 1,
+      "clock": "Q1 11:19",
+      "elapsed_minutes": 0.68,
+      "possession": "away"
+    },
+    "notes": null
+  },
+  {
+    "commentators": [
+      {
+        "name": "ara",
+        "role": "play_by_play",
+        "line": "Klay Thompson steps back for three... it's no good, misses the mark!",
+        "tone": "neutral",
+        "excitement_level": "low"
+      }
+    ],
+    "game_context": {
+      "home_team": null,
+      "away_team": null,
+      "home_score": 5,
+      "away_score": 0,
+      "leader": "home",
+      "score_diff": 5,
+      "quarter": 1,
+      "clock": "Q1 11:13",
+      "elapsed_minutes": 0.78,
+      "possession": "home"
+    },
+    "notes": null
+  },
+  {
+    "commentators": [
+      {
+        "name": "ara",
+        "role": "play_by_play",
+        "line": "Ibaka pulls down the defensive rebound after Thompson's miss.",
+        "tone": "neutral",
+        "excitement_level": "low"
+      }
+    ],
+    "game_context": {
+      "home_team": null,
+      "away_team": null,
+      "home_score": 5,
+      "away_score": 0,
+      "leader": "home",
+      "score_diff": 5,
+      "quarter": 1,
+      "clock": "Q1 11:11",
+      "elapsed_minutes": 0.82,
+      "possession": "home"
+    },
+    "notes": null
+  },
+  {
+    "commentators": [
+      {
+        "name": "ara",
+        "role": "play_by_play",
+        "line": "Roberson spots up for three... it's good! Assisted by Durant. Thunder now lead 8-0!",
+        "tone": "excited",
+        "excitement_level": "medium"
+      },
+      {
+        "name": "leo",
+        "role": "color",
+        "line": "The home team is on fire early, can't buy a basket for the visitors.",
+        "tone": "analytical",
+        "excitement_level": "medium"
+      }
+    ],
+    "game_context": {
+      "home_team": null,
+      "away_team": null,
+      "home_score": 8,
+      "away_score": 0,
+      "leader": "home",
+      "score_diff": 8,
+      "quarter": 1,
+      "clock": "Q1 10:51",
+      "elapsed_minutes": 1.15,
+      "possession": "away"
+    },
+    "notes": null
+  },
+  {
+    "commentators": [
+      {
+        "name": "ara",
+        "role": "play_by_play",
+        "line": "Green finds Bogut for the alley-oop layup... it's good! Warriors finally on the board, 8-2 Thunder.",
+        "tone": "excited",
+        "excitement_level": "medium"
+      },
+      {
+        "name": "leo",
+        "role": "color",
+        "line": "Needed that boost, Warriors shaking off the early rust with some crisp passing.",
+        "tone": "analytical",
+        "excitement_level": "medium"
+      }
+    ],
+    "game_context": {
+      "home_team": null,
+      "away_team": null,
+      "home_score": 8,
+      "away_score": 2,
+      "leader": "home",
+      "score_diff": 6,
+      "quarter": 1,
+      "clock": "Q1 10:26",
+      "elapsed_minutes": 1.57,
+      "possession": "home"
+    },
+    "notes": null
+  },
+  {
+    "commentators": [
+      {
+        "name": "ara",
+        "role": "play_by_play",
+        "line": "Westbrook drives in for the layup... it's off the rim, no good!",
+        "tone": "neutral",
+        "excitement_level": "low"
+      }
+    ],
+    "game_context": {
+      "home_team": null,
+      "away_team": null,
+      "home_score": 8,
+      "away_score": 2,
+      "leader": "home",
+      "score_diff": 6,
+      "quarter": 1,
+      "clock": "Q1 10:11",
+      "elapsed_minutes": 1.82,
+      "possession": "away"
+    },
+    "notes": null
+  },
+  {
+    "commentators": [
+      {
+        "name": "ara",
+        "role": "play_by_play",
+        "line": "Warriors come up with the rebound after Westbrook's miss.",
+        "tone": "neutral",
+        "excitement_level": "low"
+      }
+    ],
+    "game_context": {
+      "home_team": null,
+      "away_team": null,
+      "home_score": 8,
+      "away_score": 2,
+      "leader": "home",
+      "score_diff": 6,
+      "quarter": 1,
+      "clock": "Q1 10:10",
+      "elapsed_minutes": 1.83,
+      "possession": "away"
+    },
+    "notes": null
+  }
+]

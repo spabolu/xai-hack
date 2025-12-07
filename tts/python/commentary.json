@@ -1,0 +1,77 @@
+[
+  {
+    "commentary": "Welcome fans, it's time for some NBA action as we kick off the first quarter with the score tied at 0-0. It's going to be a thrilling game tonight; both teams are ready to battle it out.",
+    "game_context": {
+      "home_team": "Home",
+      "away_team": "Away",
+      "home_score": 0,
+      "away_score": 0,
+      "quarter": 1,
+      "time": "12:00"
+    },
+    "excitement_level": "low",
+    "tone": "neutral",
+    "commentator_name": "ara",
+    "timeActual": 0.0
+  },
+  {
+    "commentary": "And we're underway with the jump ball! Zach Edey going up against Wendell Carter Jr., and it's Edey's tip controlled by Jaren Jackson Jr. for the Grizzlies.",
+    "game_context": {
+      "home_team": "Home",
+      "away_team": "Away",
+      "home_score": 0,
+      "away_score": 0,
+      "quarter": 1,
+      "time": "11:55"
+    },
+    "excitement_level": "medium",
+    "tone": "excited",
+    "commentator_name": "ara",
+    "timeActual": 3.2
+  },
+  {
+    "commentary": "And what a start for the Grizzlies! D. Bane drives to the basket, puts up a floating jump shot, and it's good for two points. That makes it 2-0 early on. Absolutely, Bane's been looking sharp, and that's exactly the kind of offensive spark Memphis needed right from the tip.",
+    "game_context": {
+      "home_team": "Home",
+      "away_team": "Away",
+      "home_score": 2,
+      "away_score": 0,
+      "quarter": 1,
+      "time": "11:45"
+    },
+    "excitement_level": "medium",
+    "tone": "excited",
+    "commentator_name": "ara",
+    "timeActual": 13.8
+  },
+  {
+    "commentary": "Now, on the other end, K. Caldwell-Pope pulls up for a 26-foot step back three, but it's no good! The Magic can't convert, and the Grizzlies' defense holds firm at 2-0.",
+    "game_context": {
+      "home_team": "MEM",
+      "away_team": "ORL",
+      "home_score": 2,
+      "away_score": 0,
+      "quarter": 1,
+      "time": "11:21"
+    },
+    "excitement_level": "medium",
+    "tone": "excited",
+    "commentator_name": "ara",
+    "timeActual": 37.3
+  },
+  {
+    "commentary": "And quickly off that miss, J. Morant swoops in for the rebound, his first defensive board of the night for Memphis. They're looking to transition fast here.",
+    "game_context": {
+      "home_team": "MEM",
+      "away_team": "ORL",
+      "home_score": 2,
+      "away_score": 0,
+      "quarter": 1,
+      "time": "11:19"
+    },
+    "excitement_level": "medium",
+    "tone": "excited",
+    "commentator_name": "eve",
+    "timeActual": 39.3
+  }
+]
