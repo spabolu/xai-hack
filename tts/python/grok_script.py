@@ -231,6 +231,51 @@ CRITICAL RULES:
 
 
 # =============================================================================
+# Filler Commentary - Player Stats Search
+# =============================================================================
+
+
+async def search_player_stats(
+    player_name: str, teams: List[str]
+) -> AsyncGenerator[str, None]:
+    """
+    Use Grok with X Search to find player stats for filler commentary.
+
+    Args:
+        player_name: Name of the player to search for
+        teams: List of team tricodes in the game (e.g., ["MEM", "ORL"])
+
+    Yields:
+        Tokens from the search response
+    """
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=Config.XAI_API_KEY, base_url="https://api.x.ai/v1")
+
+    teams_str = " vs ".join(teams) if len(teams) >= 2 else teams[0] if teams else "NBA"
+
+    prompt = f"""Search for recent stats on NBA player {player_name} from the {teams_str} game.
+Give a VERY brief 1-sentence fact about their recent performance. Max 15 words. 
+Just say the fact directly, no intro like "Here's a fact"."""
+
+    try:
+        stream = await client.chat.completions.create(
+            model="grok-4-1-fast-non-reasoning",
+            messages=[{"role": "user", "content": prompt}],
+            stream=True,
+            extra_body={"search": True},  # Enable X Search
+        )
+
+        async for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    except Exception as e:
+        print(f"Search error: {e}", file=sys.stderr)
+        yield f"Stats unavailable for {player_name}."
+
+
+# =============================================================================
 # Streaming TTS (WebSocket - No File Storage)
 # =============================================================================
 

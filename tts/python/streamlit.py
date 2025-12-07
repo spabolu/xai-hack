@@ -6,12 +6,29 @@ import atexit
 import asyncio
 import json
 import time
+import random
 
 # Import streaming functions from grok_script
 from grok_script import (
     NBACommentaryAgent,
     stream_tokens_to_speaker,
+    search_player_stats,
 )
+
+
+def extract_game_info(events):
+    """Extract teams and players from game data."""
+    teams = set()
+    players = []
+    for e in events:
+        if e.get("teamTricode"):
+            teams.add(e["teamTricode"])
+        if e.get("playerNameI"):
+            players.append(e["playerNameI"])
+    # Remove duplicates from players while preserving some variety
+    unique_players = list(set(players))
+    return list(teams), unique_players
+
 
 # Page Config
 st.set_page_config(page_title="Grok NBA Commentary", page_icon="🏀", layout="wide")
@@ -78,15 +95,19 @@ if "stop_streaming" not in st.session_state:
 # --- REAL-TIME STREAMING COMMENTARY FUNCTION ---
 async def run_streaming_commentary(events, language, team_support, log_placeholder):
     """
-    Real-time event simulation with interrupt support.
+    Real-time event simulation with interrupt support and filler commentary.
 
     Flow:
     - Clock runs continuously from t=0
     - Events "arrive" when their timeActual is reached
     - New events interrupt current speech immediately
-    - No waiting - everything happens in real-time
+    - During downtime (no events), play filler with player stats
+    - Filler is always interruptible by real events
     """
     agent = NBACommentaryAgent(language=language, team_support=team_support)
+
+    # Extract teams and players for filler
+    teams, players = extract_game_info(events)
 
     # Sort events by time (don't merge - process each as it arrives)
     pending = sorted(events, key=lambda e: e.get("timeActual", 0))
@@ -96,8 +117,9 @@ async def run_streaming_commentary(events, language, team_support, log_placehold
     logs = []
     start_time = time.time()
 
-    # Track current speech task
+    # Track current speech task and filler task
     current_task = None
+    filler_task = None
 
     async def speak_event(event, voice):
         """Speak a single event (runs as background task)."""
@@ -137,19 +159,60 @@ async def run_streaming_commentary(events, language, team_support, log_placehold
 
         log_placeholder.code("\n".join(logs[-15:]), language="bash")
 
+    async def speak_filler(player, voice):
+        """Speak player stats as filler (interruptible)."""
+        nonlocal logs
+        accumulated_text = ""
+
+        async def filler_token_gen():
+            nonlocal accumulated_text, logs
+            try:
+                async for token in search_player_stats(player, teams):
+                    accumulated_text += token
+                    # Update UI with streaming tokens
+                    display_logs = logs[:-1] + [f"{logs[-1]}\n  💬 {accumulated_text}"]
+                    log_placeholder.code("\n".join(display_logs[-15:]), language="bash")
+                    yield token
+            except Exception as e:
+                logs.append(f"  ❌ Search Error: {e}")
+                log_placeholder.code("\n".join(logs[-15:]), language="bash")
+
+        try:
+            spoken_text = await stream_tokens_to_speaker(
+                filler_token_gen(), voice=voice
+            )
+            if spoken_text:
+                logs.append("  📊 Filler done")
+            else:
+                logs.append("  (empty)")
+        except asyncio.CancelledError:
+            logs.append("  📊 Filler interrupted by event")
+            raise
+        except Exception as e:
+            # Check if this is the PortAudio error after interrupt
+            if "PortAudio" in str(e) or "-9986" in str(e):
+                logs.append("  📊 Filler overridden")
+            else:
+                logs.append(f"  ❌ Filler TTS Error: {e}")
+
+        log_placeholder.code("\n".join(logs[-15:]), language="bash")
+
     logs.append(f"🚀 Real-time simulation started ({len(pending)} events)")
+    logs.append(f"   Teams: {', '.join(teams)} | Players: {len(players)}")
     log_placeholder.code("\n".join(logs[-15:]), language="bash")
 
     # Main loop: continuous clock simulation
-    while pending or (current_task and not current_task.done()):
+    while pending or current_task or filler_task:
         # Check for user cancellation
         if st.session_state.stop_streaming:
-            if current_task and not current_task.done():
-                current_task.cancel()
-                try:
-                    await current_task
-                except asyncio.CancelledError:
-                    pass
+            # Cancel both tasks
+            for task in [current_task, filler_task]:
+                if task and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
             logs.append("⏹️ Stopped by user")
             log_placeholder.code("\n".join(logs[-15:]), language="bash")
             break
@@ -166,14 +229,23 @@ async def run_streaming_commentary(events, language, team_support, log_placehold
                 still_pending.append(e)
         pending = still_pending
 
-        # Process arrived events
+        # Process arrived events (these ALWAYS take priority)
         if arrived:
             # Take the latest arrived event (most recent)
             event = arrived[-1]
             event_time = event.get("timeActual", 0)
             description = event.get("description", "")[:50]
 
-            # Cancel current speech if running (interrupt)
+            # Cancel filler if running (filler always yields to events)
+            if filler_task and not filler_task.done():
+                filler_task.cancel()
+                try:
+                    await filler_task
+                except asyncio.CancelledError:
+                    pass
+                filler_task = None
+
+            # Cancel current event speech if running (interrupt)
             if current_task and not current_task.done():
                 current_task.cancel()
                 try:
@@ -191,7 +263,6 @@ async def run_streaming_commentary(events, language, team_support, log_placehold
 
         # Check if current task finished
         if current_task and current_task.done():
-            # Retrieve any exception (to avoid "Task exception was never retrieved")
             try:
                 current_task.result()
             except asyncio.CancelledError:
@@ -200,15 +271,37 @@ async def run_streaming_commentary(events, language, team_support, log_placehold
                 pass
             current_task = None
 
+        # Check if filler task finished
+        if filler_task and filler_task.done():
+            try:
+                filler_task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+            filler_task = None
+
+        # Start filler if: no event running, no filler running, still have pending events
+        if not current_task and not filler_task and pending and players:
+            random_player = random.choice(players)
+            current_voice = voices[voice_idx % len(voices)]
+            voice_idx += 1
+            logs.append(f"📊 [Filler] [{current_voice}] Looking up {random_player}...")
+            log_placeholder.code("\n".join(logs[-15:]), language="bash")
+            filler_task = asyncio.create_task(
+                speak_filler(random_player, current_voice)
+            )
+
         # Small tick to let clock advance (50ms)
         await asyncio.sleep(0.05)
 
-    # Wait for final task to complete
-    if current_task and not current_task.done():
-        try:
-            await current_task
-        except asyncio.CancelledError:
-            pass
+    # Wait for final tasks to complete
+    for task in [current_task, filler_task]:
+        if task and not task.done():
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     logs.append("✅ Simulation complete")
     log_placeholder.code("\n".join(logs[-15:]), language="bash")
